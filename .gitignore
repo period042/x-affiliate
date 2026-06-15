@@ -20,7 +20,6 @@ scripts/generate_consult_queue.py
 scripts/generate_english_queue.py
 scripts/generate_next_two_weeks.py
 scripts/generate_note_articles.py
-scripts/generate_note_image.py
 scripts/generate_queue.py
 scripts/get_*.py
 scripts/improve_*.py

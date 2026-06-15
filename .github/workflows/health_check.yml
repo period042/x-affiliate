@@ -1,0 +1,96 @@
+name: Health Check
+
+# trigger.yml とは完全に独立した監視ジョブ
+# trigger.yml が壊れても、こちらは動き続ける
+on:
+  schedule:
+    # 3時間ごと (trigger.yml と異なるタイミング)
+    - cron: '0 */3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  check-and-heal:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check last X post and heal if needed
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // 最終投稿コミットを確認
+            const commits = await github.rest.repos.listCommits({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 20
+            });
+
+            const now = Date.now();
+            const THREE_HOURS = 3 * 60 * 60 * 1000;
+            const SIX_HOURS   = 6 * 60 * 60 * 1000;
+
+            // 最終X投稿を探す
+            const lastX = commits.data.find(c =>
+              c.commit.message.includes('auto-post tweet') ||
+              c.commit.message.includes('manual post')
+            );
+            const xAge = lastX
+              ? now - new Date(lastX.commit.committer.date).getTime()
+              : Infinity;
+
+            // 最終Note投稿を探す
+            const lastNote = commits.data.find(c =>
+              c.commit.message.includes('auto-post note') ||
+              c.commit.message.includes('note article')
+            );
+            const noteAge = lastNote
+              ? now - new Date(lastNote.commit.committer.date).getTime()
+              : Infinity;
+
+            const xHours   = (xAge   / 3600000).toFixed(1);
+            const noteHours= (noteAge/ 3600000).toFixed(1);
+            console.log(`最終X投稿: ${xHours}時間前`);
+            console.log(`最終Note投稿: ${noteHours}時間前`);
+
+            // JST 1-5時（UTC 16-20）は投稿しない
+            const utcHour = new Date().getUTCHours();
+            const isQuietTime = utcHour >= 16 && utcHour <= 20;
+
+            if (!isQuietTime) {
+              // X: 3時間以上投稿なし → 即トリガー
+              if (xAge > THREE_HOURS) {
+                console.log(`🔴 X投稿が${xHours}時間止まっています → 緊急トリガー`);
+                await github.rest.actions.createWorkflowDispatch({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  workflow_id: 'post.yml',
+                  ref: 'main'
+                });
+                core.summary.addRaw(`## ⚠️ Health Check: X投稿を強制トリガー\n- 最終投稿から${xHours}時間経過`);
+                await core.summary.write();
+              }
+
+              // Note: 6時間以上投稿なし → 即トリガー
+              if (noteAge > SIX_HOURS) {
+                console.log(`🔴 Note投稿が${noteHours}時間止まっています → 緊急トリガー`);
+                await github.rest.actions.createWorkflowDispatch({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  workflow_id: 'note_post.yml',
+                  ref: 'main'
+                });
+                core.summary.addRaw(`## ⚠️ Health Check: Note投稿を強制トリガー\n- 最終投稿から${noteHours}時間経過`);
+                await core.summary.write();
+              }
+            } else {
+              console.log(`深夜帯(UTC ${utcHour}h)のためスキップ`);
+            }
+
+            // 正常なら何もしない
+            if (xAge <= THREE_HOURS && noteAge <= SIX_HOURS) {
+              console.log('✅ X・Note ともに正常投稿中');
+            }

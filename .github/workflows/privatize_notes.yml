@@ -1,0 +1,54 @@
+name: Privatize Short Notes
+
+# 6/2-6/6に投稿された1000字未満の記事37件を下書きに戻す（一回限り）
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: privatize-notes
+  cancel-in-progress: false
+
+jobs:
+  privatize:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ runner.os }}-v1
+
+      - name: Install dependencies
+        run: pip install playwright requests
+
+      - name: Install Playwright browsers
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: |
+          python -m playwright install chromium
+          python -m playwright install-deps chromium
+
+      - name: Privatize short articles
+        env:
+          NOTE_COOKIES:   ${{ secrets.NOTE_COOKIES }}
+          GITHUB_ACTIONS: "true"
+        run: python scripts/privatize_short_notes.py
+
+      - name: Upload screenshots (failure debug)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: privatize-screenshots-${{ github.run_id }}
+          path: /tmp/fail_*.png
+          if-no-files-found: ignore

@@ -1,0 +1,45 @@
+name: Daily Reply Candidates
+
+on:
+  schedule:
+    # 毎朝8:00 JST = 23:00 UTC (前日)
+    - cron: '0 23 * * *'
+  workflow_dispatch:
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install tweepy
+
+      - name: Generate reply candidates
+        env:
+          X_API_KEY:             ${{ secrets.X_API_KEY }}
+          X_API_SECRET:          ${{ secrets.X_API_SECRET }}
+          X_ACCESS_TOKEN:        ${{ secrets.X_ACCESS_TOKEN }}
+          X_ACCESS_TOKEN_SECRET: ${{ secrets.X_ACCESS_TOKEN_SECRET }}
+          X_BEARER_TOKEN:        ${{ secrets.X_BEARER_TOKEN }}
+          GITHUB_ACTIONS:        "true"
+        run: python scripts/generate_reply_candidates.py
+
+      - name: Commit suggestions
+        if: always()
+        run: |
+          git config user.name "GitHub Actions Bot"
+          git config user.email "actions@github.com"
+          git add reply_suggestions/ 2>/dev/null || true
+          git diff --staged --quiet || git commit -m "chore: daily reply candidates [skip ci]"
+          git pull --rebase origin main
+          git push

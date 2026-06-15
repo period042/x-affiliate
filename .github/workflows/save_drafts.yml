@@ -1,0 +1,63 @@
+name: Save Note Drafts
+
+on:
+  workflow_dispatch:
+
+jobs:
+  save:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ runner.os }}-v1
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q fonts-noto-cjk
+          pip install playwright
+
+      - name: Install Playwright browsers
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: |
+          python -m playwright install chromium
+          python -m playwright install-deps chromium
+
+      - name: Save drafts to note.com
+        env:
+          NOTE_COOKIES:  ${{ secrets.NOTE_COOKIES }}
+          NOTE_EMAIL:    ${{ secrets.NOTE_EMAIL }}
+          NOTE_PASSWORD: ${{ secrets.NOTE_PASSWORD }}
+          GITHUB_ACTIONS: "true"
+          PYTHONPATH: ${{ github.workspace }}/scripts
+        run: python scripts/save_note_drafts.py
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: draft-screenshots-${{ github.run_id }}
+          path: /tmp/*.png
+          if-no-files-found: ignore
+
+      - name: Commit draft metadata
+        if: always()
+        run: |
+          git config user.name "GitHub Actions Bot"
+          git config user.email "actions@github.com"
+          git add drafts/
+          git diff --staged --quiet || git commit -m "chore: update draft metadata [skip ci]"
+          git pull --rebase origin main 2>&1 || git rebase --abort
+          git push origin main || true

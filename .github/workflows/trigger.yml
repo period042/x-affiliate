@@ -1,0 +1,94 @@
+name: Hourly Trigger
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# スケジューリングは cron-job.org が担当する（GitHub cron は使わない）
+# cron-job.org が workflow_dispatch でこのファイルを呼び出す。
+# cron-job.org URL: https://api.github.com/repos/period042/x-affiliate/actions/workflows/trigger.yml/dispatches
+# X    : 30 23,2,6,8,10,12 * * *  (UTC) → JST 8:30/11:30/15:30/17:30/19:30/21:30
+# Note : 30 2,6,10,14,23 * * *  (UTC) → JST 11:30/15:30/19:30/23:30/8:30
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+on:
+  workflow_dispatch:
+    inputs:
+      force:
+        description: '時間帯チェックをスキップして強制投稿'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  trigger-x:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const hour = new Date().getUTCHours();
+            const force = context.payload.inputs?.force === 'true';
+            const xHours = [23,2,6,10,14]; // 5回/日 JST 8:30/11:30/15:30/19:30/23:30
+            if (!xHours.includes(hour) && !force) {
+              console.log('X skipped UTC ' + hour);
+              return;
+            }
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'post.yml',
+              ref: 'main'
+            });
+            console.log('X triggered UTC ' + hour);
+
+  trigger-note:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const hour = new Date().getUTCHours();
+            const force = context.payload.inputs?.force === 'true';
+            const noteHours = [2,6,10,14,23];
+            if (!noteHours.includes(hour) && !force) {
+              console.log('Note skipped UTC ' + hour);
+              return;
+            }
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'note_post.yml',
+              ref: 'main'
+            });
+            console.log('Note triggered UTC ' + hour);
+
+  trigger-thread:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const hour = new Date().getUTCHours();
+            const force = context.payload.inputs?.force === 'true';
+            // UTC 0 = JST 9:00 に1日1回のみ実行
+            if (hour !== 0 && !force) {
+              console.log('Thread skipped UTC ' + hour);
+              return;
+            }
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'thread_post.yml',
+              ref: 'main'
+            });
+            console.log('Thread triggered UTC ' + hour);
+
+  on-failure:
+    runs-on: ubuntu-latest
+    needs: [trigger-x, trigger-note, trigger-thread]
+    if: failure()
+    steps:
+      - name: Report trigger failure
+        run: |
+          echo "## ❌ Trigger失敗 - Health Checkが代わりに投稿します" >> $GITHUB_STEP_SUMMARY
+          echo "trigger.ymlが失敗しました。health_check.ymlが3時間以内に自動回復します。" >> $GITHUB_STEP_SUMMARY

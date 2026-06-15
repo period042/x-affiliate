@@ -1,0 +1,71 @@
+﻿name: X Auto Post (AM)
+
+on:
+  workflow_dispatch:
+concurrency:
+  group: x-auto-post        # post.ymlとpost2.ymlで共通グループ → 同時実行を防ぐ
+  cancel-in-progress: false # 後から来たrunはキューで待機（キャンセルしない）
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Checkout data repo
+        uses: actions/checkout@v4
+        with:
+          repository: period042/x-affiliate-data
+          token: ${{ secrets.DATA_REPO_PAT }}
+          path: data
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install tweepy
+
+      - name: Validate queue (duplicate check)
+        continue-on-error: true
+        run: |
+          python scripts/validate_queue.py
+          if [ $? -ne 0 ]; then
+            echo "⚠️ キューに重複コンテンツあり（post_from_queue.py が自動スキップします）" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Post to X
+        env:
+          X_API_KEY:             ${{ secrets.X_API_KEY }}
+          X_API_SECRET:          ${{ secrets.X_API_SECRET }}
+          X_ACCESS_TOKEN:        ${{ secrets.X_ACCESS_TOKEN }}
+          X_ACCESS_TOKEN_SECRET: ${{ secrets.X_ACCESS_TOKEN_SECRET }}
+          GITHUB_ACTIONS:        "true"
+          DATA_DIR:              ${{ github.workspace }}/data
+        run: python scripts/post_from_queue.py
+
+      - name: Commit queue changes
+        if: always()
+        working-directory: data
+        run: |
+          git config user.name "GitHub Actions Bot"
+          git config user.email "actions@github.com"
+          git add queue/ posted/ failed_queue/ 2>/dev/null || true
+          git diff --staged --quiet || git commit -m "chore: auto-post tweet [skip ci]"
+          for i in 1 2 3; do
+            git pull --rebase origin main 2>&1 || git rebase --abort
+            git push origin main && break
+            echo "push attempt $i failed, retrying in ${i}0s..."
+            sleep $((i * 10))
+          done
+
+      - name: Result summary
+        if: failure()
+        run: |
+          echo "## ❌ X投稿失敗" >> $GITHUB_STEP_SUMMARY
+          echo "ログを確認してください。" >> $GITHUB_STEP_SUMMARY

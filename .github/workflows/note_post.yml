@@ -1,0 +1,92 @@
+﻿name: Note Auto Post
+
+on:
+  workflow_dispatch:
+concurrency:
+  group: note-auto-post     # note専用グループ（X投稿と独立）
+  cancel-in-progress: false
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Checkout data repo
+        uses: actions/checkout@v4
+        with:
+          repository: period042/x-affiliate-data
+          token: ${{ secrets.DATA_REPO_PAT }}
+          path: data
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q fonts-noto-cjk
+
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ runner.os }}-v1
+
+      - name: Install Python dependencies
+        run: pip install playwright pillow requests
+
+      - name: Install Playwright browsers
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: |
+          python -m playwright install chromium
+          python -m playwright install-deps chromium
+
+      - name: Post to note.com
+        env:
+          NOTE_COOKIES:          ${{ secrets.NOTE_COOKIES }}
+          NOTE_EMAIL:            ${{ secrets.NOTE_EMAIL }}
+          NOTE_PASSWORD:         ${{ secrets.NOTE_PASSWORD }}
+          PEXELS_API_KEY:        ${{ secrets.PEXELS_API_KEY }}
+          FIREFLY_CLIENT_ID:     ${{ secrets.FIREFLY_CLIENT_ID }}
+          FIREFLY_CLIENT_SECRET: ${{ secrets.FIREFLY_CLIENT_SECRET }}
+          GITHUB_ACTIONS:        "true"
+          DATA_DIR:              ${{ github.workspace }}/data
+          PYTHONPATH:            ${{ github.workspace }}/scripts
+        run: python scripts/post_note_article.py
+
+      - name: Upload debug screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshots-${{ github.run_id }}
+          path: /tmp/*.png
+          if-no-files-found: ignore
+
+      - name: Commit queue changes
+        if: always()
+        working-directory: data
+        run: |
+          git config user.name "GitHub Actions Bot"
+          git config user.email "actions@github.com"
+          git add note_queue/ note_posted/
+          git diff --staged --quiet || git commit -m "chore: auto-post note article [skip ci]"
+          for i in 1 2 3; do
+            git pull --rebase origin main 2>&1 || git rebase --abort
+            git push origin main && break
+            echo "push attempt $i failed, retrying in ${i}0s..."
+            sleep $((i * 10))
+          done
+
+      - name: Result summary
+        if: failure()
+        run: |
+          echo "## ❌ note投稿失敗" >> $GITHUB_STEP_SUMMARY
+          echo "ワークフローが失敗しました。上のログを確認してください。" >> $GITHUB_STEP_SUMMARY

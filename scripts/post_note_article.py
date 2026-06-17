@@ -53,8 +53,16 @@ def load_storage_state():
 
 
 def get_next_article():
-    articles = sorted(NOTE_QUEUE_DIR.glob('*.json'))
-    return articles[0] if articles else None
+    today = datetime.now().date()
+    for path in sorted(NOTE_QUEUE_DIR.glob('*.json')):
+        try:
+            d = json.loads(path.read_text(encoding='utf-8'))
+            sched = datetime.fromisoformat(d['scheduled_for']).date()
+            if sched <= today:
+                return path
+        except Exception:
+            return path  # scheduled_forが読めない場合は投稿する
+    return None
 
 
 def insert_content_with_ogp(page, content):

@@ -56,12 +56,13 @@ def get_next_article():
     today = datetime.now().date()
     for path in sorted(NOTE_QUEUE_DIR.glob('*.json')):
         try:
-            d = json.loads(path.read_text(encoding='utf-8'))
+            # utf-8-sig: BOM付きUTF-8も正しく読む
+            d = json.loads(path.read_text(encoding='utf-8-sig'))
             sched = datetime.fromisoformat(d['scheduled_for']).date()
             if sched <= today:
                 return path
-        except Exception:
-            return path  # scheduled_forが読めない場合は投稿する
+        except Exception as e:
+            print(f'[WARN] scheduled_for parse failed ({path.name}): {e} → skip')
     return None
 
 

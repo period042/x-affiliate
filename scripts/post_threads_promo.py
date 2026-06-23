@@ -237,7 +237,9 @@ def post_single(text: str) -> str:
 
 
 def post_thread_chain(posts: list) -> list:
-    """スレッド連投 → [post_id, ...] を返す"""
+    """スレッド連投 → [post_id, ...] を返す。
+    reply_to_id が code:10 で弾かれた場合（threads_manage_replies 権限不足）は
+    残り投稿を結合して単発投稿にフォールバックする。"""
     ids = []
     parent_id = None
     for i, text in enumerate(posts, 1):
@@ -248,6 +250,25 @@ def post_thread_chain(posts: list) -> list:
             f"https://graph.threads.net/v1.0/{THREADS_USER_ID}/threads",
             params=params, timeout=30,
         )
+
+        # code:10 = threads_manage_replies 権限不足 → フォールバック
+        if r.status_code != 200 and parent_id:
+            try:
+                err_code = r.json().get('error', {}).get('code')
+            except Exception:
+                err_code = None
+            if err_code == 10:
+                print(f"[WARN] threads_manage_replies 権限不足 (code:10) — "
+                      f"残り{len(posts)-i+1}投稿を結合して単発投稿にフォールバック")
+                remaining = '\n\n'.join(posts[i-1:])
+                try:
+                    fallback_id = post_single(remaining)
+                    ids.append(fallback_id)
+                    print(f"[OK] フォールバック単発投稿: {fallback_id}")
+                except Exception as e:
+                    print(f"[ERR] フォールバック投稿も失敗: {e}")
+                return ids
+
         r.raise_for_status()
         container_id = r.json()['id']
         time.sleep(3)

@@ -15,7 +15,7 @@ jobs:
       contents: read
 
     steps:
-      - name: Exchange auth code for token
+      - name: Exchange auth code for long-lived token
         id: exchange
         env:
           AUTH_CODE:  ${{ inputs.auth_code }}
@@ -24,21 +24,33 @@ jobs:
           APP_ID="1510156694190451"
           REDIRECT_URI="https://localhost/"
 
-          echo "トークン取得中..."
-          RESP=$(curl -s -X POST https://graph.threads.net/oauth/access_token \
+          echo "[1/2] 短期トークン取得..."
+          SHORT_RESP=$(curl -s -X POST https://graph.threads.net/oauth/access_token \
             --data-urlencode "client_id=$APP_ID" \
             --data-urlencode "client_secret=$APP_SECRET" \
             --data-urlencode "grant_type=authorization_code" \
             --data-urlencode "redirect_uri=$REDIRECT_URI" \
             --data-urlencode "code=$AUTH_CODE")
 
-          TOKEN=$(echo "$RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('access_token',''))")
-          if [ -z "$TOKEN" ]; then
-            echo "取得失敗: $RESP"
+          SHORT_TOKEN=$(echo "$SHORT_RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('access_token',''))")
+          if [ -z "$SHORT_TOKEN" ]; then
+            echo "短期トークン取得失敗: $SHORT_RESP"
             exit 1
           fi
-          echo "取得OK"
-          echo "TOKEN=$TOKEN" >> $GITHUB_ENV
+          echo "短期トークン取得OK"
+
+          echo "[2/2] 長期トークン（60日）に変換..."
+          LONG_RESP=$(curl -s "https://graph.threads.net/access_token?grant_type=th_long_lived_token&client_secret=$APP_SECRET&access_token=$SHORT_TOKEN")
+          LONG_TOKEN=$(echo "$LONG_RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('access_token',''))")
+          if [ -z "$LONG_TOKEN" ]; then
+            echo "長期変換失敗: $LONG_RESP"
+            echo "短期トークンで継続します（有効期間短い）"
+            LONG_TOKEN="$SHORT_TOKEN"
+          else
+            EXPIRES=$(echo "$LONG_RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('expires_in','unknown'))")
+            echo "長期トークン取得OK (expires_in=${EXPIRES}秒)"
+          fi
+          echo "TOKEN=$LONG_TOKEN" >> $GITHUB_ENV
 
       - name: Update THREADS_ACCESS_TOKEN secret
         env:

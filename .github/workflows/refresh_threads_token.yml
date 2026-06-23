@@ -13,7 +13,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      secrets: write
 
     steps:
       - name: Exchange auth code for long-lived token
@@ -58,7 +57,7 @@ jobs:
 
       - name: Update THREADS_ACCESS_TOKEN secret
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_PAT_SECRETS }}
           LONG_TOKEN: ${{ env.LONG_TOKEN }}
         run: |
           echo "$LONG_TOKEN" | gh secret set THREADS_ACCESS_TOKEN --repo period042/x-affiliate

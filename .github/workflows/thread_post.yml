@@ -1,9 +1,7 @@
 name: Thread Post
 
 on:
-  schedule:
-    # 1日1件スレッド投稿（毎日9:05 JST = 00:05 UTC）
-    - cron: '5 0 * * *'
+  # X スレッド投稿停止（2026-06-23〜）: 手動実行のみ
   workflow_dispatch:
 
 jobs:

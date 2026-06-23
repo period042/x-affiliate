@@ -60,6 +60,10 @@ def get_next_article():
             d = json.loads(path.read_text(encoding='utf-8-sig'))
             sched = datetime.fromisoformat(d['scheduled_for']).date()
             if sched <= today:
+                char_count = len(d.get('content', ''))
+                if char_count < 3000:
+                    print(f'[SKIP] 文字数不足 {char_count}字 < 3000字: {path.name}')
+                    continue
                 return path
         except Exception as e:
             print(f'[WARN] scheduled_for parse failed ({path.name}): {e} → skip')

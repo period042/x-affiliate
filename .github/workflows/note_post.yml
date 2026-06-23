@@ -2,8 +2,9 @@
 
 on:
   schedule:
-    # 毎日8:00 JST (23:00 UTC) に1件投稿
+    # 毎日8:00 JST (23:00 UTC) と 20:00 JST (11:00 UTC) に1件ずつ投稿
     - cron: '0 23 * * *'
+    - cron: '0 11 * * *'
   workflow_dispatch:
 concurrency:
   group: note-auto-post     # note専用グループ（X投稿と独立）

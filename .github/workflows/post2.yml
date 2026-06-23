@@ -1,6 +1,7 @@
 ﻿name: X Auto Post (PM)
 
 on:
+  # X投稿停止（2026-06-23〜）: スケジュール無効、手動実行のみ
   workflow_dispatch:
 concurrency:
   group: x-auto-post        # post.ymlと同じグループ → 同時実行を防ぐ

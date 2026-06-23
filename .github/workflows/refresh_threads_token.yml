@@ -15,7 +15,7 @@ jobs:
       contents: read
 
     steps:
-      - name: Exchange auth code for long-lived token
+      - name: Exchange auth code for token
         id: exchange
         env:
           AUTH_CODE:  ${{ inputs.auth_code }}
@@ -24,50 +24,32 @@ jobs:
           APP_ID="1510156694190451"
           REDIRECT_URI="https://localhost/"
 
-          echo "[1/2] 短期トークン取得..."
-          SHORT_RESP=$(curl -s -X POST https://graph.threads.net/oauth/access_token \
+          echo "トークン取得中..."
+          RESP=$(curl -s -X POST https://graph.threads.net/oauth/access_token \
             --data-urlencode "client_id=$APP_ID" \
             --data-urlencode "client_secret=$APP_SECRET" \
             --data-urlencode "grant_type=authorization_code" \
             --data-urlencode "redirect_uri=$REDIRECT_URI" \
             --data-urlencode "code=$AUTH_CODE")
-          echo "短期レスポンス: $SHORT_RESP"
 
-          SHORT_TOKEN=$(echo "$SHORT_RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('access_token',''))")
-          if [ -z "$SHORT_TOKEN" ]; then
-            echo "❌ 短期トークン取得失敗"
+          TOKEN=$(echo "$RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('access_token',''))")
+          if [ -z "$TOKEN" ]; then
+            echo "取得失敗: $RESP"
             exit 1
           fi
-          echo "✅ 短期トークン取得OK"
-
-          echo "[2/2] 長期トークン取得..."
-          LONG_RESP=$(curl -s "https://graph.threads.net/access_token?grant_type=th_long_lived_token&client_secret=$APP_SECRET&access_token=$SHORT_TOKEN")
-          echo "長期レスポンス: $LONG_RESP"
-
-          LONG_TOKEN=$(echo "$LONG_RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('access_token',''))")
-          EXPIRES=$(echo "$LONG_RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('expires_in',0)//86400)")
-
-          if [ -z "$LONG_TOKEN" ]; then
-            echo "❌ 長期トークン取得失敗"
-            exit 1
-          fi
-          echo "✅ 長期トークン取得OK（有効期間 ${EXPIRES}日）"
-          echo "LONG_TOKEN=$LONG_TOKEN" >> $GITHUB_ENV
-          echo "EXPIRES=$EXPIRES" >> $GITHUB_ENV
+          echo "取得OK"
+          echo "TOKEN=$TOKEN" >> $GITHUB_ENV
 
       - name: Update THREADS_ACCESS_TOKEN secret
         env:
           GH_TOKEN: ${{ secrets.GH_PAT_SECRETS }}
-          LONG_TOKEN: ${{ env.LONG_TOKEN }}
+          TOKEN: ${{ env.TOKEN }}
         run: |
-          echo "$LONG_TOKEN" | gh secret set THREADS_ACCESS_TOKEN --repo period042/x-affiliate
-          echo "✅ THREADS_ACCESS_TOKEN を更新しました"
+          echo "$TOKEN" | gh secret set THREADS_ACCESS_TOKEN --repo period042/x-affiliate
+          echo "THREADS_ACCESS_TOKEN 更新完了"
 
       - name: Summary
-        env:
-          EXPIRES: ${{ env.EXPIRES }}
         run: |
-          echo "## ✅ Threadsトークン更新完了" >> $GITHUB_STEP_SUMMARY
-          echo "- 有効期間: **${EXPIRES}日**" >> $GITHUB_STEP_SUMMARY
-          echo "- secret: THREADS_ACCESS_TOKEN を更新済み" >> $GITHUB_STEP_SUMMARY
+          echo "## Threadsトークン更新完了" >> $GITHUB_STEP_SUMMARY
           echo "- スコープ: threads_basic, threads_manage_replies, threads_manage_insights" >> $GITHUB_STEP_SUMMARY
+          echo "- 有効期間: 60日" >> $GITHUB_STEP_SUMMARY

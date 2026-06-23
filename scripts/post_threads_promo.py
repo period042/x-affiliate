@@ -102,6 +102,15 @@ def get_recently_promoted_urls() -> set:
     return promoted
 
 
+def verify_url(url: str) -> bool:
+    """URLが実際にアクセス可能かHEADリクエストで確認"""
+    try:
+        r = requests.head(url, timeout=10, allow_redirects=True)
+        return r.status_code == 200
+    except Exception:
+        return False
+
+
 def get_candidate_articles(note_stats: dict, recently_promoted: set) -> list:
     articles = []
     for f in sorted(NOTE_POSTED_DIR.glob('*.json')):
@@ -111,6 +120,10 @@ def get_candidate_articles(note_stats: dict, recently_promoted: set) -> list:
             if not url.startswith('https://note.com/'):
                 continue
             if url in recently_promoted:
+                continue
+            # URLアクセス確認（404等はスキップ）
+            if not verify_url(url):
+                print(f'[SKIP] URL検証失敗（404等）: {url}')
                 continue
             note_key = url.split('/n/')[-1] if '/n/' in url else ''
             stats = note_stats.get(note_key, {})

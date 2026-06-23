@@ -36,13 +36,22 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install requests anthropic
+        run: pip install requests
+
+      - name: Setup Claude credentials
+        env:
+          CLAUDE_CREDENTIALS: ${{ secrets.CLAUDE_CREDENTIALS }}
+        run: |
+          mkdir -p ~/.claude
+          echo "$CLAUDE_CREDENTIALS" > ~/.claude/.credentials.json
+
+      - name: Install Claude CLI
+        run: npm install -g @anthropic-ai/claude-code --prefer-offline 2>/dev/null || npm install -g @anthropic-ai/claude-code
 
       - name: Post to Threads
         env:
           THREADS_USER_ID:      ${{ secrets.THREADS_USER_ID }}
           THREADS_ACCESS_TOKEN: ${{ secrets.THREADS_ACCESS_TOKEN }}
-          ANTHROPIC_API_KEY:    ${{ secrets.ANTHROPIC_API_KEY }}
           NOTE_USERNAME:        english_gaishi
           GITHUB_ACTIONS:       "true"
           DATA_DIR:             ${{ github.workspace }}/data

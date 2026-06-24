@@ -215,18 +215,21 @@ def main():
             ss(page, '05_content_filled')
             print("  完了")
 
-            # OGP読み込み待機 + エディタのフォーカスを外す
+            # OGP読み込み待機 + ページトップへスクロール
             print("[5.5] OGP読み込み待機...")
             try:
                 page.wait_for_load_state('networkidle', timeout=20000)
             except Exception:
                 page.wait_for_timeout(5000)
-            # エディタ外をクリックしてフォーカスを外す
-            page.mouse.click(640, 30)
+            # ページトップへスクロールしてエディタのフォーカスを外す
+            page.evaluate("window.scrollTo(0, 0)")
+            page.wait_for_timeout(1000)
+            # エディタ外（ヘッダー領域）をクリックしてフォーカスを外す
+            page.mouse.click(200, 30)
             page.wait_for_timeout(1000)
             ss(page, '05b_before_publish')
 
-            # 公開ボタンをクリック（モーダルが開くまで最大20秒待機）
+            # 公開ボタンをクリック
             print("[6] 公開に進む...")
             clicked_step6 = False
             for sel in ['button:has-text("公開に進む")', 'button:has-text("公開設定")', 'button:has-text("公開する")']:
@@ -239,7 +242,6 @@ def main():
                     pass
 
             if not clicked_step6:
-                # JavaScriptで強制クリック
                 result = page.evaluate("""
                     () => {
                         const buttons = Array.from(document.querySelectorAll('button'));
@@ -252,12 +254,16 @@ def main():
                     print(f"  JS強制クリック: {result}")
                     clicked_step6 = True
 
+            # クリック直後のスクリーンショット（パネルが出ているか確認用）
+            page.wait_for_timeout(2000)
+            ss(page, '06a_just_after_click')
+
             if clicked_step6:
-                # モーダルの確定ボタンが出現するまで待つ
+                # パネルの確定ボタンが出現するまで待つ（最大25秒）
                 for sel in ['button:has-text("更新する")', 'button:has-text("公開する")', 'button:has-text("保存する")']:
                     try:
-                        page.wait_for_selector(sel, timeout=20000)
-                        print(f"  モーダル確認: {sel} が出現")
+                        page.wait_for_selector(sel, timeout=25000)
+                        print(f"  パネル確認: {sel} が出現")
                         break
                     except Exception:
                         pass

@@ -162,36 +162,6 @@ def save_via_route_interception(note_key: str, cookies: dict, fixed_body: str,
     # インターセプト結果の追跡
     result = {'intercepted': False, 'save_status': None, 'error': None}
 
-    def handle_draft_save(route, request):
-        """draft_save リクエストのボディを fixed_body に差し替え、route.fetch() でレスポンスを直接取得"""
-        try:
-            original_data = json.loads(request.post_data or '{}')
-            original_data['body'] = fixed_body
-            modified = json.dumps(original_data, ensure_ascii=False)
-            print(f"[route] インターセプト: {request.url}")
-            print(f"[route] 変更後 body 先頭150: {modified[:150]}")
-            result['intercepted'] = True
-
-            # route.fetch() でサーバーへ実際のリクエストを送信し直接レスポンス取得
-            server_resp = route.fetch(post_data=modified)
-            result['save_status'] = server_resp.status
-            try:
-                resp_text = server_resp.text()
-                print(f"[route] server status: {server_resp.status}")
-                print(f"[route] server body: {resp_text[:400]}")
-            except Exception:
-                pass
-            # ブラウザにレスポンスを返す
-            route.fulfill(response=server_resp)
-
-        except Exception as e:
-            print(f"[route] インターセプトエラー: {e}")
-            result['error'] = str(e)
-            try:
-                route.continue_()
-            except Exception:
-                pass
-
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         storage = {'cookies': [
@@ -202,63 +172,49 @@ def save_via_route_interception(note_key: str, cookies: dict, fixed_body: str,
         context = browser.new_context(storage_state=storage, viewport={'width': 1280, 'height': 900})
         page = context.new_page()
 
-        # draft_save へのリクエストをインターセプト (route.fetch で直接取得)
-        page.route('**/api/v1/text_notes/draft_save**', handle_draft_save)
-
         edit_url = f'https://editor.note.com/notes/{note_key}/edit'
         print(f"[route] 編集ページ読み込み: {edit_url}")
         page.goto(edit_url, wait_until='networkidle', timeout=40000)
         page.wait_for_timeout(5000)
 
-        # エディタにフォーカスして trivial edit (スペース→削除)
-        # これで保存ボタンが活性化される
-        try:
-            editor_el = page.locator('.ProseMirror, [contenteditable="true"]').first
-            editor_el.click(timeout=5000)
-            page.keyboard.press('End')
-            page.keyboard.type(' ')
-            page.wait_for_timeout(300)
-            page.keyboard.press('Backspace')
-            page.wait_for_timeout(1000)
-            print("[route] trivial edit 完了")
-        except Exception as e:
-            print(f"[route] エディタ操作スキップ: {e}")
+        # ブラウザの JS から直接 draft_save に POST
+        # editor.note.com から note.com へは CORS で許可されている
+        post_body = json.dumps({"body": fixed_body}, ensure_ascii=False)
 
-        # 保存ボタンをクリック (route.fetch がレスポンスを直接取得するため待機不要)
-        save_selectors = [
-            'button:has-text("保存")',
-            'button:has-text("下書き保存")',
-            '[aria-label="保存"]',
-        ]
-        clicked = False
-        for sel in save_selectors:
-            try:
-                btn = page.locator(sel).first
-                if btn.is_visible(timeout=2000):
-                    print(f"[route] 保存ボタンクリック: {sel}")
-                    btn.dispatch_event('click')
-                    # route.fetch が完了するまで待機
-                    page.wait_for_timeout(10000)
-                    clicked = True
-                    break
-            except Exception as e:
-                print(f"[route] 保存ボタン操作エラー: {e}")
+        pw_result = page.evaluate("""
+            async (params) => {
+                try {
+                    const resp = await fetch(
+                        'https://note.com/api/v1/text_notes/draft_save?id=' + params.article_id + '&is_temp_saved=true',
+                        {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'X-Requested-With': 'XMLHttpRequest',
+                            },
+                            credentials: 'include',
+                            body: params.body,
+                        }
+                    );
+                    const text = await resp.text();
+                    return { status: resp.status, body: text.substring(0, 400) };
+                } catch(e) {
+                    return { error: String(e) };
+                }
+            }
+        """, {"article_id": article_id, "body": post_body})
 
-        if not clicked:
-            print("[route] 保存ボタンなし — autosave 待機 (15s)")
-            page.wait_for_timeout(15000)
+        print(f"[route] JS fetch draft_save: status={pw_result.get('status')}, body={pw_result.get('body', pw_result.get('error',''))[:300]}")
+        result['save_status'] = pw_result.get('status')
+        result['intercepted'] = True
 
         browser.close()
 
-    if result['intercepted'] and result['save_status'] in (200, 201, 204):
-        print(f"✅ draft_save インターセプトで更新成功 (status={result['save_status']})")
+    if result['save_status'] in (200, 201, 204):
+        print(f"✅ JS fetch で draft_save 成功 (status={result['save_status']})")
         return True
 
-    if result['intercepted']:
-        print(f"[route] インターセプト成功だが save 失敗 (status={result['save_status']})")
-    else:
-        print("[route] draft_save インターセプトなし")
-
+    print(f"[route] JS fetch 失敗 (status={result['save_status']})")
     return False
 
 

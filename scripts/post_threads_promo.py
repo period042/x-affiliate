@@ -288,6 +288,70 @@ def post_thread_chain(posts: list) -> list:
     return ids
 
 
+def create_token_expired_issue(error_body: str):
+    """トークン期限切れGitHub Issueを作成（重複なし）"""
+    gh_token = os.environ.get('GITHUB_TOKEN', '')
+    repo = os.environ.get('GITHUB_REPOSITORY', 'period042/x-affiliate')
+    if not gh_token:
+        print("[WARN] GITHUB_TOKEN未設定のためIssue作成スキップ")
+        return
+
+    headers = {
+        'Authorization': f'Bearer {gh_token}',
+        'Accept': 'application/vnd.github.v3+json',
+    }
+    try:
+        r = requests.get(
+            f'https://api.github.com/repos/{repo}/issues',
+            params={'labels': 'threads-token-expired', 'state': 'open'},
+            headers=headers, timeout=10,
+        )
+        if r.ok and r.json():
+            issue = r.json()[0]
+            print(f"[INFO] 既存のトークン期限切れIssue #\{issue['number']} が存在します（新規作成スキップ）")
+            if SUMMARY_FILE:
+                with open(SUMMARY_FILE, 'a') as f:
+                    f.write(f"## ⚠️ Threadsトークン期限切れ\n既存 Issue #{issue['number']} を参照してください: {issue['html_url']}\n")
+            return
+
+        body = f"""## Threadsアクセストークンが期限切れです
+
+**エラー**: `{error_body[:300]}`
+
+**対処方法**:
+1. 以下URLをブラウザで開き「許可する」をクリック
+2. リダイレクト先URL (`https://localhost/?code=XXXX`) の `code=` 以降をコピー
+3. Claudeに `XXXX` 部分を渡すと自動でトークンを更新します
+
+```
+https://threads.net/oauth/authorize?client_id=1510156694190451&redirect_uri=https%3A%2F%2Flocalhost%2F&scope=threads_basic,threads_manage_replies,threads_manage_insights&response_type=code
+```
+"""
+        # ラベルが存在しない場合のため先に作成試みる
+        requests.post(
+            f'https://api.github.com/repos/{repo}/labels',
+            json={'name': 'threads-token-expired', 'color': 'e11d48'},
+            headers=headers, timeout=10,
+        )
+        r2 = requests.post(
+            f'https://api.github.com/repos/{repo}/issues',
+            json={
+                'title': '🔑 Threadsトークン期限切れ — 再認証が必要',
+                'body': body,
+                'labels': ['threads-token-expired'],
+            },
+            headers=headers, timeout=10,
+        )
+        if r2.ok:
+            issue = r2.json()
+            print(f"[INFO] Issue作成: #{issue['number']} {issue['html_url']}")
+            if SUMMARY_FILE:
+                with open(SUMMARY_FILE, 'a') as f:
+                    f.write(f"## ⚠️ Threadsトークン期限切れ\n新規 Issue #{issue['number']}: {issue['html_url']}\n")
+    except Exception as e:
+        print(f"[WARN] Issue作成失敗: {e}")
+
+
 def main():
     if not THREADS_USER_ID or not THREADS_ACCESS_TOKEN:
         print("[SKIP] THREADS_USER_ID または THREADS_ACCESS_TOKEN が未設定")
@@ -356,8 +420,18 @@ def main():
 
     except requests.HTTPError as e:
         body = e.response.text if e.response is not None else ''
-        print(f"[ERR] Threads投稿失敗: {e.response.status_code} {body}")
-        write_summary(f"## Threads宣伝投稿\n❌ 失敗: {e.response.status_code}\n{body}")
+        status = e.response.status_code if e.response is not None else 0
+        print(f"[ERR] Threads投稿失敗: {status} {body}")
+        # code:190 = token expired/invalid → Issue作成してexit 0（失敗扱いしない）
+        try:
+            err_code = e.response.json().get('error', {}).get('code', 0) if e.response else 0
+        except Exception:
+            err_code = 0
+        if err_code == 190 or (status == 400 and 'access token' in body.lower()):
+            print("[WARN] トークン期限切れを検出 → GitHub Issueを作成して終了")
+            create_token_expired_issue(body)
+            sys.exit(0)
+        write_summary(f"## Threads宣伝投稿\n❌ 失敗: {status}\n{body}")
         sys.exit(1)
 
 

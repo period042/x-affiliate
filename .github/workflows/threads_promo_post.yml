@@ -18,6 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      issues: write
 
     steps:
       - name: Checkout
@@ -55,6 +56,8 @@ jobs:
           NOTE_USERNAME:        english_gaishi
           GITHUB_ACTIONS:       "true"
           DATA_DIR:             ${{ github.workspace }}/data
+          GITHUB_TOKEN:         ${{ github.token }}
+          GITHUB_REPOSITORY:    ${{ github.repository }}
         run: python scripts/post_threads_promo.py
 
       - name: Commit

@@ -163,27 +163,32 @@ def save_via_route_interception(note_key: str, cookies: dict, fixed_body: str,
     result = {'intercepted': False, 'save_status': None, 'error': None}
 
     def handle_draft_save(route, request):
-        """draft_save リクエストのボディを fixed_body に差し替える"""
+        """draft_save リクエストのボディを fixed_body に差し替え、route.fetch() でレスポンスを直接取得"""
         try:
             original_data = json.loads(request.post_data or '{}')
             original_data['body'] = fixed_body
             modified = json.dumps(original_data, ensure_ascii=False)
             print(f"[route] インターセプト: {request.url}")
-            print(f"[route] 変更後 body 先頭100: {modified[:100]}")
+            print(f"[route] 変更後 body 先頭150: {modified[:150]}")
             result['intercepted'] = True
-            route.continue_(post_data=modified)
+
+            # route.fetch() でサーバーへ実際のリクエストを送信し直接レスポンス取得
+            server_resp = route.fetch(post_data=modified)
+            result['save_status'] = server_resp.status
+            try:
+                resp_text = server_resp.text()
+                print(f"[route] server status: {server_resp.status}")
+                print(f"[route] server body: {resp_text[:400]}")
+            except Exception:
+                pass
+            # ブラウザにレスポンスを返す
+            route.fulfill(response=server_resp)
+
         except Exception as e:
             print(f"[route] インターセプトエラー: {e}")
             result['error'] = str(e)
-            route.continue_()
-
-    def on_response(resp):
-        if 'draft_save' in resp.url:
-            result['save_status'] = resp.status
-            print(f"[route] draft_save response: {resp.status}")
             try:
-                body = resp.text()
-                print(f"[route] response body: {body[:300]}")
+                route.continue_()
             except Exception:
                 pass
 
@@ -197,9 +202,8 @@ def save_via_route_interception(note_key: str, cookies: dict, fixed_body: str,
         context = browser.new_context(storage_state=storage, viewport={'width': 1280, 'height': 900})
         page = context.new_page()
 
-        # draft_save へのリクエストをインターセプト
+        # draft_save へのリクエストをインターセプト (route.fetch で直接取得)
         page.route('**/api/v1/text_notes/draft_save**', handle_draft_save)
-        page.on('response', on_response)
 
         edit_url = f'https://editor.note.com/notes/{note_key}/edit'
         print(f"[route] 編集ページ読み込み: {edit_url}")
@@ -220,8 +224,7 @@ def save_via_route_interception(note_key: str, cookies: dict, fixed_body: str,
         except Exception as e:
             print(f"[route] エディタ操作スキップ: {e}")
 
-        # 保存ボタンをクリック + response を待機
-        # expect_response はクリック前に設定しておく必要がある
+        # 保存ボタンをクリック (route.fetch がレスポンスを直接取得するため待機不要)
         save_selectors = [
             'button:has-text("保存")',
             'button:has-text("下書き保存")',
@@ -233,39 +236,17 @@ def save_via_route_interception(note_key: str, cookies: dict, fixed_body: str,
                 btn = page.locator(sel).first
                 if btn.is_visible(timeout=2000):
                     print(f"[route] 保存ボタンクリック: {sel}")
-                    # response 待機コンテキストを先に設定
-                    with page.expect_response(
-                        lambda r: 'draft_save' in r.url,
-                        timeout=20000
-                    ) as resp_info:
-                        btn.dispatch_event('click')
-                    save_resp = resp_info.value
-                    result['save_status'] = save_resp.status
-                    try:
-                        resp_body = save_resp.text()
-                        print(f"[route] draft_save response: {save_resp.status}")
-                        print(f"[route] response body: {resp_body[:300]}")
-                    except Exception:
-                        pass
+                    btn.dispatch_event('click')
+                    # route.fetch が完了するまで待機
+                    page.wait_for_timeout(10000)
                     clicked = True
                     break
             except Exception as e:
                 print(f"[route] 保存ボタン操作エラー: {e}")
 
         if not clicked:
-            # autosave を待つ (ページ読み込み後 editor が autosave する場合)
             print("[route] 保存ボタンなし — autosave 待機 (15s)")
-            try:
-                with page.expect_response(
-                    lambda r: 'draft_save' in r.url,
-                    timeout=15000
-                ) as resp_info:
-                    page.wait_for_timeout(15000)
-                save_resp = resp_info.value
-                result['save_status'] = save_resp.status
-                print(f"[route] autosave response: {save_resp.status}")
-            except Exception as e:
-                print(f"[route] autosave 待機エラー: {e}")
+            page.wait_for_timeout(15000)
 
         browser.close()
 

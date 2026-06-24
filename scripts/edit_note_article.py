@@ -220,7 +220,8 @@ def save_via_route_interception(note_key: str, cookies: dict, fixed_body: str,
         except Exception as e:
             print(f"[route] エディタ操作スキップ: {e}")
 
-        # 保存ボタンをクリック（前回の傍受で button:has-text("保存") が機能すると判明）
+        # 保存ボタンをクリック + response を待機
+        # expect_response はクリック前に設定しておく必要がある
         save_selectors = [
             'button:has-text("保存")',
             'button:has-text("下書き保存")',
@@ -232,16 +233,39 @@ def save_via_route_interception(note_key: str, cookies: dict, fixed_body: str,
                 btn = page.locator(sel).first
                 if btn.is_visible(timeout=2000):
                     print(f"[route] 保存ボタンクリック: {sel}")
-                    btn.dispatch_event('click')
-                    page.wait_for_timeout(5000)
+                    # response 待機コンテキストを先に設定
+                    with page.expect_response(
+                        lambda r: 'draft_save' in r.url,
+                        timeout=20000
+                    ) as resp_info:
+                        btn.dispatch_event('click')
+                    save_resp = resp_info.value
+                    result['save_status'] = save_resp.status
+                    try:
+                        resp_body = save_resp.text()
+                        print(f"[route] draft_save response: {save_resp.status}")
+                        print(f"[route] response body: {resp_body[:300]}")
+                    except Exception:
+                        pass
                     clicked = True
                     break
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[route] 保存ボタン操作エラー: {e}")
 
         if not clicked:
-            print("[route] 保存ボタンが見つからない — autosave を待機 (10s)")
-            page.wait_for_timeout(10000)
+            # autosave を待つ (ページ読み込み後 editor が autosave する場合)
+            print("[route] 保存ボタンなし — autosave 待機 (15s)")
+            try:
+                with page.expect_response(
+                    lambda r: 'draft_save' in r.url,
+                    timeout=15000
+                ) as resp_info:
+                    page.wait_for_timeout(15000)
+                save_resp = resp_info.value
+                result['save_status'] = save_resp.status
+                print(f"[route] autosave response: {save_resp.status}")
+            except Exception as e:
+                print(f"[route] autosave 待機エラー: {e}")
 
         browser.close()
 

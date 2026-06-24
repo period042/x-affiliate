@@ -497,6 +497,11 @@ def api_update(note_key: str, cookies: dict) -> bool:
 
 
 def main():
+    print("[DISABLED] edit_note_article.py は無効化されています。")
+    print("  空 figure を挿入するロジックが記事を破壊するため使用禁止。")
+    print("  今後の投稿は post_note_article.py の insert_content_with_ogp で OGP カード化される。")
+    sys.exit(0)
+
     if not NOTE_KEY:
         print("[ERR] NOTE_KEY が未設定")
         sys.exit(1)

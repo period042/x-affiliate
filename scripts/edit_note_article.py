@@ -20,14 +20,13 @@ def fix_cross_links_html(html_body: str) -> str:
     → <p ...>関連記事：「title」</p>
       <figure embedded-service="note" data-src="URL" ...></figure>
     """
-    # （関連記事: 「title」 https://note.com/...）を含む <p> タグを検出
     pattern = (
-        r'(<p(?:[^>]*)>)'                        # <p ...>
-        r'[（\(]関連記事[:：]\s*'             # （関連記事:
-        r'[「\「]([^」\」]+)[」\」]'  # 「title」
-        r'\s+(https://note\.com/\S+?)'           # URL
-        r'[）\)]'                             # ）
-        r'(</p>)'                                # </p>
+        r'(<p(?:[^>]*)>)'
+        r'[（\(]関連記事[:：]\s*'
+        r'[「\「]([^」\」]+)[」\」]'
+        r'\s+(https://note\.com/\S+?)'
+        r'[）\)]'
+        r'(</p>)'
     )
 
     def make_embed(m):
@@ -36,10 +35,9 @@ def fix_cross_links_html(html_body: str) -> str:
         url    = m.group(3).rstrip('）)').strip()
         p_close = m.group(4)
 
-        # note key から embedded-content-key を生成
         key_match = re.search(r'/n/(n[0-9a-f]+)', url)
         if key_match:
-            note_key_body = key_match.group(1)[1:]   # 先頭の 'n' を除く
+            note_key_body = key_match.group(1)[1:]
             embed_key = f"emb{note_key_body}"
             embedded_service = "note"
         else:
@@ -114,28 +112,13 @@ def get_session_via_playwright(cookies: dict) -> dict:
             page.click('button[type="submit"]')
             page.wait_for_load_state('networkidle', timeout=20000)
 
-        # 編集ページを開いてセッション確立
         edit_url = f'https://editor.note.com/notes/{NOTE_KEY}/edit'
         print(f"[P] 編集ページ: {edit_url}")
         page.goto(edit_url, wait_until='networkidle', timeout=30000)
         page.wait_for_timeout(3000)
 
-        # ブラウザ内 cookie を確認（HttpOnly含む全クッキー）
         browser_cookies = context.cookies()
         print(f"[P] ブラウザ cookie: {[c['name'] for c in browser_cookies if 'note.com' in c.get('domain','')]}")
-
-        # CSRF token を meta タグから取得
-        csrf = page.evaluate("""() => {
-            const m = document.querySelector('meta[name="csrf-token"]');
-            if (m) return m.getAttribute('content');
-            // window.__reactFiber__ から探すパターン
-            if (window.csrfToken) return window.csrfToken;
-            return null;
-        }""")
-        if csrf:
-            print(f"[P] CSRF token (meta): {csrf[:20]}...")
-            import builtins
-            builtins._NOTE_CSRF_TOKEN = csrf
 
         all_cookies = context.cookies()
         browser.close()
@@ -144,34 +127,47 @@ def get_session_via_playwright(cookies: dict) -> dict:
              for c in all_cookies
              if 'note.com' in c.get('domain', '')}
     print(f"[P] セッション確立完了 ({len(fresh)} cookies)")
-    print(f"[P] cookie keys: {list(fresh.keys())}")
     return fresh
 
 
-def save_via_route_interception(note_key: str, cookies: dict, fixed_body: str,
-                                article_id: int) -> bool:
+def save_and_publish_via_playwright(note_key: str, cookies: dict, fixed_body: str,
+                                    article_id: int) -> bool:
     """
-    Playwright ルートインターセプト + route.continue_(post_data=...) で
-    draft_save リクエストのボディを修正済みコンテンツに差し替える。
-    保存後に v3 GET API で実際に記事が更新されたか検証する。
+    Playwright route interception で text_notes への全書き込みリクエストの
+    body を fixed_body に差し替えた上で、公開フロー（下書き保存→公開ボタン→確定）を実行する。
     """
     from playwright.sync_api import sync_playwright
     import requests as _req
 
-    print("[route] draft_save インターセプトで更新を試みます...")
+    print("[route] draft_save + publish インターセプトで更新を試みます...")
 
-    intercepted_count = [0]
+    intercepted = {'draft': 0, 'publish': 0}
 
-    def handle_draft_save(route, request):
-        """draft_save リクエストのボディを fixed_body に差し替え"""
+    def handle_note_api(route, request):
+        url = request.url
+        method = request.method
+        if method not in ('POST', 'PUT', 'PATCH'):
+            route.continue_()
+            return
         try:
-            original_data = json.loads(request.post_data or '{}')
-            original_data['body'] = fixed_body
-            modified = json.dumps(original_data, ensure_ascii=False)
-            intercepted_count[0] += 1
-            print(f"[route] インターセプト #{intercepted_count[0]}: {request.url[:80]}")
-            print(f"[route] 送信 body 先頭100: {modified[:100]}")
-            route.continue_(post_data=modified)
+            data = json.loads(request.post_data or '{}')
+            replaced = False
+            # top-level body
+            if 'body' in data:
+                data['body'] = fixed_body
+                replaced = True
+            # nested text_note.body
+            if isinstance(data.get('text_note'), dict) and 'body' in data['text_note']:
+                data['text_note']['body'] = fixed_body
+                replaced = True
+            if replaced:
+                label = 'draft' if 'draft_save' in url else 'publish'
+                intercepted[label] += 1
+                print(f"[route] {method} {label} body置換: {url[:80]}")
+                route.continue_(post_data=json.dumps(data, ensure_ascii=False))
+            else:
+                print(f"[route] {method} パススルー (body なし): {url[:80]}")
+                route.continue_()
         except Exception as e:
             print(f"[route] インターセプトエラー: {e}")
             route.continue_()
@@ -183,16 +179,23 @@ def save_via_route_interception(note_key: str, cookies: dict, fixed_body: str,
              'path': '/', 'httpOnly': False, 'secure': True}
             for k, v in cookies.items()
         ]}
-        context = browser.new_context(storage_state=storage, viewport={'width': 1280, 'height': 900})
+        context = browser.new_context(
+            storage_state=storage,
+            viewport={'width': 1280, 'height': 900}
+        )
         page = context.new_page()
-        page.route('**/api/v1/text_notes/draft_save**', handle_draft_save)
+
+        # text_notes への全書き込みをインターセプト
+        page.route('**/api/v1/text_notes**', handle_note_api)
+        page.route('**/api/v2/text_notes**', handle_note_api)
 
         edit_url = f'https://editor.note.com/notes/{note_key}/edit'
         print(f"[route] 編集ページ読み込み: {edit_url}")
         page.goto(edit_url, wait_until='networkidle', timeout=40000)
         page.wait_for_timeout(5000)
+        page.screenshot(path='/tmp/edit_step1_loaded.png')
 
-        # trivial edit で保存ボタンを活性化
+        # trivial edit でエディタをダーティ状態にする
         try:
             editor_el = page.locator('.ProseMirror, [contenteditable="true"]').first
             editor_el.click(timeout=5000)
@@ -205,46 +208,117 @@ def save_via_route_interception(note_key: str, cookies: dict, fixed_body: str,
         except Exception as e:
             print(f"[route] エディタ操作スキップ: {e}")
 
-        # 保存ボタンクリック
+        # 下書き保存ボタンをクリック
+        save_clicked = False
         for sel in ['button:has-text("保存")', 'button:has-text("下書き保存")', '[aria-label="保存"]']:
             try:
                 btn = page.locator(sel).first
                 if btn.is_visible(timeout=2000):
                     print(f"[route] 保存ボタンクリック: {sel}")
                     btn.dispatch_event('click')
+                    save_clicked = True
                     break
             except Exception:
                 pass
 
-        # サーバーへのリクエストが完了するまで十分待機 (30秒)
-        print("[route] サーバー処理待機 (30s)...")
-        page.wait_for_timeout(30000)
+        if not save_clicked:
+            print("[route] 保存ボタンが見つかりません — 自動保存を待機")
+
+        # draft_save が完了するまで待機
+        print("[route] draft_save 待機 (15s)...")
+        page.wait_for_timeout(15000)
+        page.screenshot(path='/tmp/edit_step2_saved.png')
+
+        print(f"[route] この時点の draft インターセプト数: {intercepted['draft']}")
+
+        # 公開ボタンをクリック
+        publish_btn_clicked = False
+        for sel in [
+            'button:has-text("公開に進む")',
+            'button:has-text("更新する")',
+            'button:has-text("公開する")',
+            'button:has-text("投稿する")',
+        ]:
+            try:
+                btn = page.locator(sel).first
+                if btn.is_visible(timeout=3000):
+                    print(f"[route] 公開ボタンクリック: {sel}")
+                    btn.click(timeout=5000)
+                    publish_btn_clicked = True
+                    break
+            except Exception:
+                pass
+
+        if not publish_btn_clicked:
+            print("[route] 公開ボタンが見つかりません")
+            page.screenshot(path='/tmp/edit_step3_no_publish_btn.png')
+            # ページ上のボタン一覧をデバッグ出力
+            btns = page.locator('button').all_text_contents()
+            print(f"[route] 現在のボタン一覧: {btns[:20]}")
+        else:
+            # モーダルが開くまで待機
+            page.wait_for_timeout(3000)
+            page.screenshot(path='/tmp/edit_step3_modal.png')
+
+            # モーダル内の確定ボタンをクリック
+            confirm_clicked = False
+            for sel in [
+                'button:has-text("更新する")',
+                'button:has-text("公開する")',
+                'button:has-text("投稿する")',
+                '[data-testid="update-button"]',
+            ]:
+                try:
+                    # 複数ある場合は最後のもの（モーダル内）
+                    btns_found = page.locator(sel)
+                    count = btns_found.count()
+                    if count > 0:
+                        target = btns_found.last if count > 1 else btns_found.first
+                        if target.is_visible(timeout=3000):
+                            print(f"[route] 確定ボタンクリック: {sel} (count={count})")
+                            target.click(timeout=5000)
+                            confirm_clicked = True
+                            break
+                except Exception as e:
+                    print(f"[route] 確定ボタンエラー ({sel}): {e}")
+
+            if not confirm_clicked:
+                print("[route] 確定ボタンが見つかりません")
+                btns = page.locator('button').all_text_contents()
+                print(f"[route] モーダル内ボタン一覧: {btns[:20]}")
+
+            print("[route] 公開処理待機 (20s)...")
+            page.wait_for_timeout(20000)
+            page.screenshot(path='/tmp/edit_step4_published.png')
+
         browser.close()
 
-    if intercepted_count[0] == 0:
-        print("[route] draft_save インターセプトなし")
+    print(f"[route] インターセプト結果: draft={intercepted['draft']}, publish={intercepted['publish']}")
+
+    if intercepted['draft'] == 0 and intercepted['publish'] == 0:
+        print("[route] インターセプトなし — 失敗")
         return False
 
-    print(f"[route] {intercepted_count[0]} 件インターセプト完了 — 記事更新を GET で検証")
-
-    # GET で記事が実際に更新されたか検証 (最大 5 回リトライ)
-    for attempt in range(1, 6):
-        import time
-        time.sleep(3)
+    # 公開記事が実際に更新されたか検証 (最大 6 回 × 5秒)
+    import time
+    for attempt in range(1, 7):
+        time.sleep(5)
         resp = _req.get(f"https://note.com/api/v3/notes/{note_key}", timeout=20)
-        if resp.status_code == 200:
-            current_body = resp.json().get('data', {}).get('body', '')
-            if 'embedded-service="note"' in current_body or '<figure' in current_body:
-                # figure 要素が存在 → 更新成功
-                print(f"✅ 更新確認: 記事に <figure> 要素が存在 (試行 {attempt})")
-                return True
-            if '（関連記事' not in current_body:
-                # もとのクロスリンクが消えた → 何らかの更新があった
-                print(f"✅ 更新確認: クロスリンク '（関連記事' が削除された (試行 {attempt})")
-                return True
-            print(f"[route] 試行 {attempt}: 記事はまだ未更新 (body_len={len(current_body)})")
+        if resp.status_code != 200:
+            print(f"[route] 試行 {attempt}: GET失敗 (status={resp.status_code})")
+            continue
+        cur = resp.json().get('data', {}).get('body', '')
+        has_embed = 'embedded-service="note"' in cur and 'n71b416f7c92b' in cur
+        no_crosslink = '（関連記事' not in cur
+        print(f"[route] 試行 {attempt}: body_len={len(cur)}, has_embed={has_embed}, no_crosslink={no_crosslink}")
+        if has_embed and no_crosslink:
+            print(f"✅ 公開記事更新確認: OGP figure 追加 + クロスリンク削除 (試行 {attempt})")
+            return True
+        if no_crosslink:
+            print(f"✅ 公開記事更新確認: クロスリンク削除済み (試行 {attempt})")
+            return True
 
-    print("[route] 検証タイムアウト: 更新が反映されず")
+    print("[route] 検証タイムアウト: 公開記事が更新されず")
     return False
 
 
@@ -260,25 +334,19 @@ def api_update(note_key: str, cookies: dict) -> bool:
         'Origin': 'https://editor.note.com',
     }
 
-    # CSRF / XSRF トークン付与
-    # 1. Playwright が取得した meta csrf-token を優先
     import builtins
     csrf_from_page = getattr(builtins, '_NOTE_CSRF_TOKEN', '')
     if csrf_from_page:
         base_headers['X-CSRF-Token'] = csrf_from_page
-        print(f"[API] X-CSRF-Token (meta): {csrf_from_page[:20]}...")
     else:
-        # 2. cookie フォールバック
         for xsrf_key in ('XSRF-TOKEN', '_xsrf', 'csrf_token', 'csrftoken'):
             xsrf = cookies.get(xsrf_key, '')
             if xsrf:
                 base_headers['X-XSRF-TOKEN'] = xsrf
-                print(f"[API] XSRF-TOKEN ({xsrf_key}): {xsrf[:20]}...")
                 break
         else:
             print("[WARN] CSRF/XSRF トークンが見つかりません — 422 になる可能性あり")
 
-    # --- GET: v3 エンドポイントで記事取得 ---
     get_url = f"https://note.com/api/v3/notes/{note_key}"
     print(f"[API] GET {get_url}")
     resp = requests.get(get_url, headers={
@@ -301,21 +369,17 @@ def api_update(note_key: str, cookies: dict) -> bool:
     status = article.get('status', 'published')
     print(f"  id={article_id}, status={status}, body_len={len(body)}")
 
-    # クロスリンクの存在確認
     if '関連記事' not in body:
         print("  変更なし（クロスリンクが見つかりません）")
         return True
 
     print(f"  クロスリンク候補を検出: {body.count('関連記事')} 件")
-    print(f"  クロスリンク前後 (100文字): {body[max(0,body.find('関連記事')-20):body.find('関連記事')+100]}")
+    idx = body.find('関連記事')
+    print(f"  [DBG] HTML周辺:\n{body[max(0,idx-50):idx+200]}")
 
-    # --- クロスリンク修正 ---
     fixed_body = fix_cross_links_html(body)
     if fixed_body == body:
         print("  正規表現にマッチするクロスリンクなし（手動確認が必要）")
-        # デバッグ: 周辺 HTML を出力
-        idx = body.find('関連記事')
-        print(f"  [DBG] HTML周辺:\n{body[max(0,idx-100):idx+300]}")
         return False
 
     print("  クロスリンク修正完了")
@@ -324,7 +388,7 @@ def api_update(note_key: str, cookies: dict) -> bool:
         print("  [ERR] 記事 numeric ID が取得できません")
         return False
 
-    # --- PUT: 複数エンドポイントを順に試す ---
+    # PUT を複数フォーマットで試す
     put_candidates = [
         f"https://note.com/api/v1/text_notes/{article_id}",
         f"https://note.com/api/v2/text_notes/{article_id}",
@@ -333,46 +397,36 @@ def api_update(note_key: str, cookies: dict) -> bool:
     ]
 
     put_headers = {**base_headers, 'Content-Type': 'application/json'}
-    put_body = {
-        "text_note": {
-            "body": fixed_body,
-            "status": status,
-        }
-    }
+    # 2種類のボディフォーマットを試す
+    put_body_formats = [
+        {"text_note": {"body": fixed_body, "status": status}},
+        {"body": fixed_body, "status": status},
+        {"body": fixed_body},
+    ]
 
     for put_url in put_candidates:
-        print(f"[API] PUT {put_url}")
-        try:
-            put_resp = requests.put(
-                put_url,
-                cookies=cookies, headers=put_headers,
-                json=put_body, timeout=30
-            )
-            print(f"  status: {put_resp.status_code}")
-            print(f"  response: {put_resp.text[:600]}")
-            if put_resp.status_code in (200, 201, 204):
-                print(f"✅ 記事 {note_key} の更新成功 ({put_url})")
-                return True
-            elif put_resp.status_code in (405, 422):
-                print(f"  {put_resp.status_code} — PATCH を試みます")
-                patch_resp = requests.patch(
+        for body_fmt in put_body_formats:
+            print(f"[API] PUT {put_url} body_keys={list(body_fmt.keys())}")
+            try:
+                put_resp = requests.put(
                     put_url,
                     cookies=cookies, headers=put_headers,
-                    json=put_body, timeout=30
+                    json=body_fmt, timeout=30
                 )
-                print(f"  PATCH status: {patch_resp.status_code}")
-                print(f"  PATCH response: {patch_resp.text[:400]}")
-                if patch_resp.status_code in (200, 201, 204):
-                    print(f"✅ 記事 {note_key} の更新成功 (PATCH {put_url})")
+                print(f"  status: {put_resp.status_code}")
+                if put_resp.status_code in (200, 201, 204):
+                    print(f"✅ 記事 {note_key} の更新成功 ({put_url})")
                     return True
-            elif put_resp.status_code in (401, 403):
-                print("  認証エラー — 次のエンドポイントへ")
-                continue
-        except Exception as e:
-            print(f"  例外: {e}")
+                elif put_resp.status_code == 422:
+                    print(f"  422: {put_resp.text[:200]}")
+                elif put_resp.status_code in (401, 403):
+                    print(f"  {put_resp.status_code}: 認証エラー")
+                    break  # このURLは諦める
+            except Exception as e:
+                print(f"  例外: {e}")
 
-    print("[ERR] 全 PUT エンドポイントで失敗 — ブラウザ内 fetch を試みます")
-    return None  # None = try Playwright fetch
+    print("[ERR] 全 PUT エンドポイントで失敗 — Playwright フォールバックへ")
+    return None  # None = Playwright フォールバックを試す
 
 
 def main():
@@ -385,19 +439,16 @@ def main():
         print("[ERR] 認証情報なし（NOTE_COOKIES または NOTE_EMAIL/PASSWORD が必要）")
         sys.exit(1)
 
-    # Playwright でセッション確立（XSRF トークン取得のため）
     try:
         cookies = get_session_via_playwright(cookies)
     except Exception as e:
         print(f"[WARN] Playwright セッション確立失敗: {e}")
-        print("  保存済みクッキーで API 試行します")
 
-    # API で直接更新
     result = api_update(NOTE_KEY, cookies)
     if result is True:
         sys.exit(0)
 
-    # フォールバック: ルートインターセプトで draft_save を差し替え
+    # フォールバック: Playwright で draft_save + publish をインターセプト
     if result is None:
         import requests as _req
         resp = _req.get(f"https://note.com/api/v3/notes/{NOTE_KEY}", timeout=20)
@@ -407,7 +458,7 @@ def main():
             body = article_data.get('body', '')
             fixed_body = fix_cross_links_html(body)
             if fixed_body != body and article_id:
-                ok = save_via_route_interception(NOTE_KEY, cookies, fixed_body, article_id)
+                ok = save_and_publish_via_playwright(NOTE_KEY, cookies, fixed_body, article_id)
                 if ok:
                     sys.exit(0)
 

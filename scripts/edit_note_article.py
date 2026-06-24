@@ -151,16 +151,30 @@ def get_session_via_playwright(cookies: dict) -> dict:
 def save_via_route_interception(note_key: str, cookies: dict, fixed_body: str,
                                 article_id: int) -> bool:
     """
-    Playwright ルートインターセプトで draft_save リクエストのボディを
-    修正済みコンテンツに差し替えて note.com に送信する。
-    ブラウザが直接リクエストを行うため CORS/CSRF の問題を回避できる。
+    Playwright ルートインターセプト + route.continue_(post_data=...) で
+    draft_save リクエストのボディを修正済みコンテンツに差し替える。
+    保存後に v3 GET API で実際に記事が更新されたか検証する。
     """
     from playwright.sync_api import sync_playwright
+    import requests as _req
 
     print("[route] draft_save インターセプトで更新を試みます...")
 
-    # インターセプト結果の追跡
-    result = {'intercepted': False, 'save_status': None, 'error': None}
+    intercepted_count = [0]
+
+    def handle_draft_save(route, request):
+        """draft_save リクエストのボディを fixed_body に差し替え"""
+        try:
+            original_data = json.loads(request.post_data or '{}')
+            original_data['body'] = fixed_body
+            modified = json.dumps(original_data, ensure_ascii=False)
+            intercepted_count[0] += 1
+            print(f"[route] インターセプト #{intercepted_count[0]}: {request.url[:80]}")
+            print(f"[route] 送信 body 先頭100: {modified[:100]}")
+            route.continue_(post_data=modified)
+        except Exception as e:
+            print(f"[route] インターセプトエラー: {e}")
+            route.continue_()
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -171,50 +185,66 @@ def save_via_route_interception(note_key: str, cookies: dict, fixed_body: str,
         ]}
         context = browser.new_context(storage_state=storage, viewport={'width': 1280, 'height': 900})
         page = context.new_page()
+        page.route('**/api/v1/text_notes/draft_save**', handle_draft_save)
 
         edit_url = f'https://editor.note.com/notes/{note_key}/edit'
         print(f"[route] 編集ページ読み込み: {edit_url}")
         page.goto(edit_url, wait_until='networkidle', timeout=40000)
         page.wait_for_timeout(5000)
 
-        # ブラウザの JS から直接 draft_save に POST
-        # editor.note.com から note.com へは CORS で許可されている
-        post_body = json.dumps({"body": fixed_body}, ensure_ascii=False)
+        # trivial edit で保存ボタンを活性化
+        try:
+            editor_el = page.locator('.ProseMirror, [contenteditable="true"]').first
+            editor_el.click(timeout=5000)
+            page.keyboard.press('End')
+            page.keyboard.type(' ')
+            page.wait_for_timeout(300)
+            page.keyboard.press('Backspace')
+            page.wait_for_timeout(1000)
+            print("[route] trivial edit 完了")
+        except Exception as e:
+            print(f"[route] エディタ操作スキップ: {e}")
 
-        pw_result = page.evaluate("""
-            async (params) => {
-                try {
-                    const resp = await fetch(
-                        'https://note.com/api/v1/text_notes/draft_save?id=' + params.article_id + '&is_temp_saved=true',
-                        {
-                            method: 'POST',
-                            headers: {
-                                'Content-Type': 'application/json',
-                                'X-Requested-With': 'XMLHttpRequest',
-                            },
-                            credentials: 'include',
-                            body: params.body,
-                        }
-                    );
-                    const text = await resp.text();
-                    return { status: resp.status, body: text.substring(0, 400) };
-                } catch(e) {
-                    return { error: String(e) };
-                }
-            }
-        """, {"article_id": article_id, "body": post_body})
+        # 保存ボタンクリック
+        for sel in ['button:has-text("保存")', 'button:has-text("下書き保存")', '[aria-label="保存"]']:
+            try:
+                btn = page.locator(sel).first
+                if btn.is_visible(timeout=2000):
+                    print(f"[route] 保存ボタンクリック: {sel}")
+                    btn.dispatch_event('click')
+                    break
+            except Exception:
+                pass
 
-        print(f"[route] JS fetch draft_save: status={pw_result.get('status')}, body={pw_result.get('body', pw_result.get('error',''))[:300]}")
-        result['save_status'] = pw_result.get('status')
-        result['intercepted'] = True
-
+        # サーバーへのリクエストが完了するまで十分待機 (30秒)
+        print("[route] サーバー処理待機 (30s)...")
+        page.wait_for_timeout(30000)
         browser.close()
 
-    if result['save_status'] in (200, 201, 204):
-        print(f"✅ JS fetch で draft_save 成功 (status={result['save_status']})")
-        return True
+    if intercepted_count[0] == 0:
+        print("[route] draft_save インターセプトなし")
+        return False
 
-    print(f"[route] JS fetch 失敗 (status={result['save_status']})")
+    print(f"[route] {intercepted_count[0]} 件インターセプト完了 — 記事更新を GET で検証")
+
+    # GET で記事が実際に更新されたか検証 (最大 5 回リトライ)
+    for attempt in range(1, 6):
+        import time
+        time.sleep(3)
+        resp = _req.get(f"https://note.com/api/v3/notes/{note_key}", timeout=20)
+        if resp.status_code == 200:
+            current_body = resp.json().get('data', {}).get('body', '')
+            if 'embedded-service="note"' in current_body or '<figure' in current_body:
+                # figure 要素が存在 → 更新成功
+                print(f"✅ 更新確認: 記事に <figure> 要素が存在 (試行 {attempt})")
+                return True
+            if '（関連記事' not in current_body:
+                # もとのクロスリンクが消えた → 何らかの更新があった
+                print(f"✅ 更新確認: クロスリンク '（関連記事' が削除された (試行 {attempt})")
+                return True
+            print(f"[route] 試行 {attempt}: 記事はまだ未更新 (body_len={len(current_body)})")
+
+    print("[route] 検証タイムアウト: 更新が反映されず")
     return False
 
 

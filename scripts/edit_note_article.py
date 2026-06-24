@@ -148,37 +148,44 @@ def get_session_via_playwright(cookies: dict) -> dict:
     return fresh
 
 
-def intercept_editor_save(note_key: str, cookies: dict, fixed_body: str) -> bool:
+def save_via_route_interception(note_key: str, cookies: dict, fixed_body: str,
+                                article_id: int) -> bool:
     """
-    editor.note.com でのネットワークリクエストを傍受し、
-    実際の save API を特定してリプレイする。
+    Playwright ルートインターセプトで draft_save リクエストのボディを
+    修正済みコンテンツに差し替えて note.com に送信する。
+    ブラウザが直接リクエストを行うため CORS/CSRF の問題を回避できる。
     """
     from playwright.sync_api import sync_playwright
-    import threading
 
-    print("[intercept] editor ネットワーク傍受開始...")
+    print("[route] draft_save インターセプトで更新を試みます...")
 
-    captured = {'put_req': None, 'csrf_token': None, 'window_vars': {}}
+    # インターセプト結果の追跡
+    result = {'intercepted': False, 'save_status': None, 'error': None}
 
-    def on_request(req):
-        method = req.method.upper()
-        url = req.url
-        # text_notes への PUT/PATCH/POST を傍受
-        if method in ('PUT', 'PATCH', 'POST') and 'text_notes' in url:
-            print(f"[intercept] {method} {url}")
-            captured['put_req'] = {
-                'method': method,
-                'url': url,
-                'headers': dict(req.headers),
-                'post_data': req.post_data or '',
-            }
-        # ヘッダーに csrf が含まれるリクエストを記録
-        if any('csrf' in k.lower() or 'xsrf' in k.lower()
-               for k in req.headers.keys()):
-            for k, v in req.headers.items():
-                if 'csrf' in k.lower() or 'xsrf' in k.lower():
-                    print(f"[intercept] CSRF header detected: {k}={v[:40]}")
-                    captured['csrf_token'] = v
+    def handle_draft_save(route, request):
+        """draft_save リクエストのボディを fixed_body に差し替える"""
+        try:
+            original_data = json.loads(request.post_data or '{}')
+            original_data['body'] = fixed_body
+            modified = json.dumps(original_data, ensure_ascii=False)
+            print(f"[route] インターセプト: {request.url}")
+            print(f"[route] 変更後 body 先頭100: {modified[:100]}")
+            result['intercepted'] = True
+            route.continue_(post_data=modified)
+        except Exception as e:
+            print(f"[route] インターセプトエラー: {e}")
+            result['error'] = str(e)
+            route.continue_()
+
+    def on_response(resp):
+        if 'draft_save' in resp.url:
+            result['save_status'] = resp.status
+            print(f"[route] draft_save response: {resp.status}")
+            try:
+                body = resp.text()
+                print(f"[route] response body: {body[:300]}")
+            except Exception:
+                pass
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -189,134 +196,65 @@ def intercept_editor_save(note_key: str, cookies: dict, fixed_body: str) -> bool
         ]}
         context = browser.new_context(storage_state=storage, viewport={'width': 1280, 'height': 900})
         page = context.new_page()
-        page.on('request', on_request)
+
+        # draft_save へのリクエストをインターセプト
+        page.route('**/api/v1/text_notes/draft_save**', handle_draft_save)
+        page.on('response', on_response)
 
         edit_url = f'https://editor.note.com/notes/{note_key}/edit'
-        print(f"[intercept] 編集ページ読み込み: {edit_url}")
+        print(f"[route] 編集ページ読み込み: {edit_url}")
         page.goto(edit_url, wait_until='networkidle', timeout=40000)
         page.wait_for_timeout(5000)
 
-        # window 変数から CSRF/認証情報を探す
-        win_info = page.evaluate("""() => {
-            const info = {};
-            // meta csrf-token
-            const m = document.querySelector('meta[name="csrf-token"]');
-            if (m) info.meta_csrf = m.content;
-            // window オブジェクトから関連変数を探す
-            const keys = Object.keys(window);
-            for (const k of keys) {
-                const lk = k.toLowerCase();
-                if (lk.includes('csrf') || lk.includes('xsrf') || lk.includes('token')) {
-                    try { info['win_' + k] = String(window[k]).substring(0, 60); } catch(e) {}
-                }
-            }
-            // __NEXT_DATA__ や __reactFiber__ などから探す
-            if (window.__NEXT_DATA__) {
-                const nd = window.__NEXT_DATA__;
-                if (nd.props && nd.props.csrfToken)
-                    info.next_csrf = nd.props.csrfToken;
-            }
-            return info;
-        }""")
-        print(f"[intercept] window vars: {win_info}")
-        captured['window_vars'] = win_info
-
-        # ProseMirror エディタを見つけてフォーカス、スペースを入力してデリート
-        # これで autosave または save button が有効になる可能性がある
+        # エディタにフォーカスして trivial edit (スペース→削除)
+        # これで保存ボタンが活性化される
         try:
-            # エディタの div を見つける
             editor_el = page.locator('.ProseMirror, [contenteditable="true"]').first
             editor_el.click(timeout=5000)
             page.keyboard.press('End')
             page.keyboard.type(' ')
-            page.wait_for_timeout(500)
+            page.wait_for_timeout(300)
             page.keyboard.press('Backspace')
-            page.wait_for_timeout(2000)
-            print("[intercept] エディタに trivial edit を入力")
+            page.wait_for_timeout(1000)
+            print("[route] trivial edit 完了")
         except Exception as e:
-            print(f"[intercept] エディタ操作スキップ: {e}")
+            print(f"[route] エディタ操作スキップ: {e}")
 
-        # 保存ボタンを探してクリック (React イベント用に dispatchEvent も試みる)
+        # 保存ボタンをクリック（前回の傍受で button:has-text("保存") が機能すると判明）
         save_selectors = [
             'button:has-text("保存")',
-            'button:has-text("公開")',
-            '[data-testid="publish-button"]',
-            'button.o-publishButton',
+            'button:has-text("下書き保存")',
+            '[aria-label="保存"]',
         ]
+        clicked = False
         for sel in save_selectors:
             try:
                 btn = page.locator(sel).first
                 if btn.is_visible(timeout=2000):
-                    print(f"[intercept] 保存ボタンをクリック: {sel}")
-                    # JS dispatchEvent で React イベントを確実に発火
+                    print(f"[route] 保存ボタンクリック: {sel}")
                     btn.dispatch_event('click')
-                    page.wait_for_timeout(3000)
+                    page.wait_for_timeout(5000)
+                    clicked = True
                     break
             except Exception:
                 pass
 
-        page.wait_for_timeout(5000)
-
-        # 傍受した PUT リクエストがあればリプレイ
-        if captured['put_req']:
-            req_info = captured['put_req']
-            print(f"[intercept] 傍受成功: {req_info['method']} {req_info['url']}")
-            print(f"[intercept] headers: {list(req_info['headers'].keys())}")
-            print(f"[intercept] body(先頭200): {req_info['post_data'][:200]}")
-
-            # 傍受したリクエストのヘッダーを使って、固定 body で再送信
-            import requests as _req
-            resp = _req.request(
-                method=req_info['method'],
-                url=req_info['url'],
-                headers=req_info['headers'],
-                cookies=cookies,
-                data=req_info['post_data'].encode('utf-8') if req_info['post_data'] else None,
-                timeout=30,
-            )
-            print(f"[intercept-replay] status: {resp.status_code}")
-            print(f"[intercept-replay] body: {resp.text[:300]}")
-            if resp.status_code in (200, 201, 204):
-                browser.close()
-                print("✅ 傍受リクエストのリプレイで更新成功（テスト）")
-                # 実際の更新はここで行う
-                pass
+        if not clicked:
+            print("[route] 保存ボタンが見つからない — autosave を待機 (10s)")
+            page.wait_for_timeout(10000)
 
         browser.close()
 
-    # 傍受でリクエスト形式が判明した場合、その情報を使って直接 PUT
-    csrf = captured.get('csrf_token') or captured['window_vars'].get('meta_csrf')
-    if csrf:
-        print(f"[intercept] CSRF token 取得: {csrf[:30]}")
-        return _api_put_with_csrf(note_key, cookies, fixed_body, csrf)
+    if result['intercepted'] and result['save_status'] in (200, 201, 204):
+        print(f"✅ draft_save インターセプトで更新成功 (status={result['save_status']})")
+        return True
+
+    if result['intercepted']:
+        print(f"[route] インターセプト成功だが save 失敗 (status={result['save_status']})")
+    else:
+        print("[route] draft_save インターセプトなし")
 
     return False
-
-
-def _api_put_with_csrf(note_key: str, cookies: dict, fixed_body: str, csrf_token: str) -> bool:
-    """傍受した CSRF トークンを使って PUT を実行する"""
-    import requests
-
-    article_id = 166673362  # n6855a6f6aaf0 の numeric ID
-
-    headers = {
-        'Accept': 'application/json, text/plain, */*',
-        'Content-Type': 'application/json',
-        'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 '
-                      '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Referer': f'https://editor.note.com/notes/{note_key}/edit/',
-        'Origin': 'https://editor.note.com',
-        'X-CSRF-Token': csrf_token,
-        'X-Requested-With': 'XMLHttpRequest',
-    }
-    body = {"text_note": {"body": fixed_body, "status": "published"}}
-
-    resp = requests.put(
-        f"https://note.com/api/v1/text_notes/{article_id}",
-        headers=headers, cookies=cookies, json=body, timeout=30
-    )
-    print(f"[csrf-put] status: {resp.status_code}, body: {resp.text[:300]}")
-    return resp.status_code in (200, 201, 204)
 
 
 def api_update(note_key: str, cookies: dict) -> bool:
@@ -468,15 +406,17 @@ def main():
     if result is True:
         sys.exit(0)
 
-    # フォールバック: ネットワーク傍受で実際の save API を特定
+    # フォールバック: ルートインターセプトで draft_save を差し替え
     if result is None:
         import requests as _req
         resp = _req.get(f"https://note.com/api/v3/notes/{NOTE_KEY}", timeout=20)
         if resp.status_code == 200:
-            body = resp.json().get('data', {}).get('body', '')
+            article_data = resp.json().get('data', {})
+            article_id = article_data.get('id')
+            body = article_data.get('body', '')
             fixed_body = fix_cross_links_html(body)
-            if fixed_body != body:
-                ok = intercept_editor_save(NOTE_KEY, cookies, fixed_body)
+            if fixed_body != body and article_id:
+                ok = save_via_route_interception(NOTE_KEY, cookies, fixed_body, article_id)
                 if ok:
                     sys.exit(0)
 

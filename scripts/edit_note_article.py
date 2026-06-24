@@ -148,15 +148,38 @@ def get_session_via_playwright(cookies: dict) -> dict:
     return fresh
 
 
-def save_via_playwright_fetch(note_key: str, cookies: dict, fixed_body: str,
-                              article_id: int, article_title: str = '') -> bool:
+def intercept_editor_save(note_key: str, cookies: dict, fixed_body: str) -> bool:
     """
-    note.com ページから同一オリジン fetch で PUT を実行する。
-    CORS の問題を回避するため editor.note.com ではなく note.com から fetch する。
+    editor.note.com でのネットワークリクエストを傍受し、
+    実際の save API を特定してリプレイする。
     """
     from playwright.sync_api import sync_playwright
+    import threading
 
-    print("[PW-fetch] note.com 上からの同一オリジン fetch を試みます...")
+    print("[intercept] editor ネットワーク傍受開始...")
+
+    captured = {'put_req': None, 'csrf_token': None, 'window_vars': {}}
+
+    def on_request(req):
+        method = req.method.upper()
+        url = req.url
+        # text_notes への PUT/PATCH/POST を傍受
+        if method in ('PUT', 'PATCH', 'POST') and 'text_notes' in url:
+            print(f"[intercept] {method} {url}")
+            captured['put_req'] = {
+                'method': method,
+                'url': url,
+                'headers': dict(req.headers),
+                'post_data': req.post_data or '',
+            }
+        # ヘッダーに csrf が含まれるリクエストを記録
+        if any('csrf' in k.lower() or 'xsrf' in k.lower()
+               for k in req.headers.keys()):
+            for k, v in req.headers.items():
+                if 'csrf' in k.lower() or 'xsrf' in k.lower():
+                    print(f"[intercept] CSRF header detected: {k}={v[:40]}")
+                    captured['csrf_token'] = v
+
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         storage = {'cookies': [
@@ -166,98 +189,134 @@ def save_via_playwright_fetch(note_key: str, cookies: dict, fixed_body: str,
         ]}
         context = browser.new_context(storage_state=storage, viewport={'width': 1280, 'height': 900})
         page = context.new_page()
+        page.on('request', on_request)
 
-        # note.com ドメインに留まる (editor.note.com は CORS がブロックされる)
-        print("[PW-fetch] note.com トップへ移動...")
-        page.goto('https://note.com', wait_until='domcontentloaded', timeout=30000)
-        page.wait_for_timeout(2000)
+        edit_url = f'https://editor.note.com/notes/{note_key}/edit'
+        print(f"[intercept] 編集ページ読み込み: {edit_url}")
+        page.goto(edit_url, wait_until='networkidle', timeout=40000)
+        page.wait_for_timeout(5000)
 
-        # meta csrf-token を確認
-        csrf = page.evaluate("""() => {
+        # window 変数から CSRF/認証情報を探す
+        win_info = page.evaluate("""() => {
+            const info = {};
+            // meta csrf-token
             const m = document.querySelector('meta[name="csrf-token"]');
-            return m ? m.getAttribute('content') : null;
+            if (m) info.meta_csrf = m.content;
+            // window オブジェクトから関連変数を探す
+            const keys = Object.keys(window);
+            for (const k of keys) {
+                const lk = k.toLowerCase();
+                if (lk.includes('csrf') || lk.includes('xsrf') || lk.includes('token')) {
+                    try { info['win_' + k] = String(window[k]).substring(0, 60); } catch(e) {}
+                }
+            }
+            // __NEXT_DATA__ や __reactFiber__ などから探す
+            if (window.__NEXT_DATA__) {
+                const nd = window.__NEXT_DATA__;
+                if (nd.props && nd.props.csrfToken)
+                    info.next_csrf = nd.props.csrfToken;
+            }
+            return info;
         }""")
-        print(f"[PW-fetch] meta csrf-token: {csrf[:20] if csrf else 'なし'}")
+        print(f"[intercept] window vars: {win_info}")
+        captured['window_vars'] = win_info
 
-        # PUT ペイロード (JSON 文字列として Python 側で作成)
-        put_payload = {
-            "text_note": {
-                "body": fixed_body,
-                "status": "published",
-            }
-        }
-        if article_title:
-            put_payload["text_note"]["name"] = article_title
-        if csrf:
-            put_payload["authenticity_token"] = csrf
+        # ProseMirror エディタを見つけてフォーカス、スペースを入力してデリート
+        # これで autosave または save button が有効になる可能性がある
+        try:
+            # エディタの div を見つける
+            editor_el = page.locator('.ProseMirror, [contenteditable="true"]').first
+            editor_el.click(timeout=5000)
+            page.keyboard.press('End')
+            page.keyboard.type(' ')
+            page.wait_for_timeout(500)
+            page.keyboard.press('Backspace')
+            page.wait_for_timeout(2000)
+            print("[intercept] エディタに trivial edit を入力")
+        except Exception as e:
+            print(f"[intercept] エディタ操作スキップ: {e}")
 
-        put_body_json = json.dumps(put_payload, ensure_ascii=False)
+        # 保存ボタンを探してクリック (React イベント用に dispatchEvent も試みる)
+        save_selectors = [
+            'button:has-text("保存")',
+            'button:has-text("公開")',
+            '[data-testid="publish-button"]',
+            'button.o-publishButton',
+        ]
+        for sel in save_selectors:
+            try:
+                btn = page.locator(sel).first
+                if btn.is_visible(timeout=2000):
+                    print(f"[intercept] 保存ボタンをクリック: {sel}")
+                    # JS dispatchEvent で React イベントを確実に発火
+                    btn.dispatch_event('click')
+                    page.wait_for_timeout(3000)
+                    break
+            except Exception:
+                pass
 
-        # Playwright の evaluate には文字列を直接渡す方法を使う
-        result = page.evaluate("""
-            async (params) => {
-                try {
-                    const resp = await fetch(
-                        '/api/v1/text_notes/' + params.article_id,
-                        {
-                            method: 'PUT',
-                            headers: {
-                                'Content-Type': 'application/json',
-                                'Accept': 'application/json, text/plain, */*',
-                                'X-Requested-With': 'XMLHttpRequest',
-                            },
-                            credentials: 'include',
-                            body: params.body,
-                        }
-                    );
-                    const text = await resp.text();
-                    return { status: resp.status, body: text.substring(0, 600) };
-                } catch(e) {
-                    return { error: String(e) };
-                }
-            }
-        """, {"article_id": article_id, "body": put_body_json})
+        page.wait_for_timeout(5000)
 
-        print(f"[PW-fetch] PUT result: status={result.get('status')}, body={result.get('body', result.get('error',''))[:300]}")
+        # 傍受した PUT リクエストがあればリプレイ
+        if captured['put_req']:
+            req_info = captured['put_req']
+            print(f"[intercept] 傍受成功: {req_info['method']} {req_info['url']}")
+            print(f"[intercept] headers: {list(req_info['headers'].keys())}")
+            print(f"[intercept] body(先頭200): {req_info['post_data'][:200]}")
 
-        if result.get('status') in (200, 201, 204):
-            browser.close()
-            print("✅ ブラウザ内 fetch で記事更新成功")
-            return True
-
-        # PATCH も試みる
-        result2 = page.evaluate("""
-            async (params) => {
-                try {
-                    const resp = await fetch(
-                        '/api/v1/text_notes/' + params.article_id,
-                        {
-                            method: 'PATCH',
-                            headers: {
-                                'Content-Type': 'application/json',
-                                'Accept': 'application/json, text/plain, */*',
-                                'X-Requested-With': 'XMLHttpRequest',
-                            },
-                            credentials: 'include',
-                            body: params.body,
-                        }
-                    );
-                    const text = await resp.text();
-                    return { status: resp.status, body: text.substring(0, 600) };
-                } catch(e) {
-                    return { error: String(e) };
-                }
-            }
-        """, {"article_id": article_id, "body": put_body_json})
-
-        print(f"[PW-fetch] PATCH result: status={result2.get('status')}, body={result2.get('body', result2.get('error',''))[:300]}")
+            # 傍受したリクエストのヘッダーを使って、固定 body で再送信
+            import requests as _req
+            resp = _req.request(
+                method=req_info['method'],
+                url=req_info['url'],
+                headers=req_info['headers'],
+                cookies=cookies,
+                data=req_info['post_data'].encode('utf-8') if req_info['post_data'] else None,
+                timeout=30,
+            )
+            print(f"[intercept-replay] status: {resp.status_code}")
+            print(f"[intercept-replay] body: {resp.text[:300]}")
+            if resp.status_code in (200, 201, 204):
+                browser.close()
+                print("✅ 傍受リクエストのリプレイで更新成功（テスト）")
+                # 実際の更新はここで行う
+                pass
 
         browser.close()
 
-    if result2.get('status') in (200, 201, 204):
-        print("✅ ブラウザ内 PATCH で記事更新成功")
-        return True
+    # 傍受でリクエスト形式が判明した場合、その情報を使って直接 PUT
+    csrf = captured.get('csrf_token') or captured['window_vars'].get('meta_csrf')
+    if csrf:
+        print(f"[intercept] CSRF token 取得: {csrf[:30]}")
+        return _api_put_with_csrf(note_key, cookies, fixed_body, csrf)
+
     return False
+
+
+def _api_put_with_csrf(note_key: str, cookies: dict, fixed_body: str, csrf_token: str) -> bool:
+    """傍受した CSRF トークンを使って PUT を実行する"""
+    import requests
+
+    article_id = 166673362  # n6855a6f6aaf0 の numeric ID
+
+    headers = {
+        'Accept': 'application/json, text/plain, */*',
+        'Content-Type': 'application/json',
+        'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 '
+                      '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Referer': f'https://editor.note.com/notes/{note_key}/edit/',
+        'Origin': 'https://editor.note.com',
+        'X-CSRF-Token': csrf_token,
+        'X-Requested-With': 'XMLHttpRequest',
+    }
+    body = {"text_note": {"body": fixed_body, "status": "published"}}
+
+    resp = requests.put(
+        f"https://note.com/api/v1/text_notes/{article_id}",
+        headers=headers, cookies=cookies, json=body, timeout=30
+    )
+    print(f"[csrf-put] status: {resp.status_code}, body: {resp.text[:300]}")
+    return resp.status_code in (200, 201, 204)
 
 
 def api_update(note_key: str, cookies: dict) -> bool:
@@ -409,20 +468,15 @@ def main():
     if result is True:
         sys.exit(0)
 
-    # フォールバック: ブラウザ内 fetch (CORS/CSRF を正しく処理)
+    # フォールバック: ネットワーク傍受で実際の save API を特定
     if result is None:
         import requests as _req
         resp = _req.get(f"https://note.com/api/v3/notes/{NOTE_KEY}", timeout=20)
         if resp.status_code == 200:
-            article_data = resp.json().get('data', {})
-            article_id = article_data.get('id')
-            article_title = article_data.get('name', '')
-            body = article_data.get('body', '')
+            body = resp.json().get('data', {}).get('body', '')
             fixed_body = fix_cross_links_html(body)
-            if fixed_body != body and article_id:
-                ok = save_via_playwright_fetch(
-                    NOTE_KEY, cookies, fixed_body, article_id, article_title
-                )
+            if fixed_body != body:
+                ok = intercept_editor_save(NOTE_KEY, cookies, fixed_body)
                 if ok:
                     sys.exit(0)
 

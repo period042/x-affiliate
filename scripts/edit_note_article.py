@@ -148,14 +148,15 @@ def get_session_via_playwright(cookies: dict) -> dict:
     return fresh
 
 
-def save_via_playwright_fetch(note_key: str, cookies: dict, fixed_body: str, article_id: int) -> bool:
+def save_via_playwright_fetch(note_key: str, cookies: dict, fixed_body: str,
+                              article_id: int, article_title: str = '') -> bool:
     """
-    Playwright ブラウザ内から fetch を実行する。
-    editor.note.com ページからのリクエストなので、CORS と CSRF が正しく処理される。
+    note.com ページから同一オリジン fetch で PUT を実行する。
+    CORS の問題を回避するため editor.note.com ではなく note.com から fetch する。
     """
     from playwright.sync_api import sync_playwright
 
-    print("[PW-fetch] ブラウザ内 fetch で PUT を試みます...")
+    print("[PW-fetch] note.com 上からの同一オリジン fetch を試みます...")
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         storage = {'cookies': [
@@ -166,49 +167,95 @@ def save_via_playwright_fetch(note_key: str, cookies: dict, fixed_body: str, art
         context = browser.new_context(storage_state=storage, viewport={'width': 1280, 'height': 900})
         page = context.new_page()
 
-        edit_url = f'https://editor.note.com/notes/{note_key}/edit'
-        page.goto(edit_url, wait_until='networkidle', timeout=30000)
-        page.wait_for_timeout(3000)
+        # note.com ドメインに留まる (editor.note.com は CORS がブロックされる)
+        print("[PW-fetch] note.com トップへ移動...")
+        page.goto('https://note.com', wait_until='domcontentloaded', timeout=30000)
+        page.wait_for_timeout(2000)
 
-        # ブラウザ内から note.com API へ fetch
-        # editor.note.com → note.com は CORS で許可されているはず
-        put_body = json.dumps({
+        # meta csrf-token を確認
+        csrf = page.evaluate("""() => {
+            const m = document.querySelector('meta[name="csrf-token"]');
+            return m ? m.getAttribute('content') : null;
+        }""")
+        print(f"[PW-fetch] meta csrf-token: {csrf[:20] if csrf else 'なし'}")
+
+        # PUT ペイロード (JSON 文字列として Python 側で作成)
+        put_payload = {
             "text_note": {
                 "body": fixed_body,
-                "status": "published"
+                "status": "published",
             }
-        })
+        }
+        if article_title:
+            put_payload["text_note"]["name"] = article_title
+        if csrf:
+            put_payload["authenticity_token"] = csrf
 
-        result = page.evaluate(f"""
-            async () => {{
-                try {{
+        put_body_json = json.dumps(put_payload, ensure_ascii=False)
+
+        # Playwright の evaluate には文字列を直接渡す方法を使う
+        result = page.evaluate("""
+            async (params) => {
+                try {
                     const resp = await fetch(
-                        'https://note.com/api/v1/text_notes/{article_id}',
-                        {{
+                        '/api/v1/text_notes/' + params.article_id,
+                        {
                             method: 'PUT',
-                            headers: {{
+                            headers: {
                                 'Content-Type': 'application/json',
                                 'Accept': 'application/json, text/plain, */*',
                                 'X-Requested-With': 'XMLHttpRequest',
-                            }},
+                            },
                             credentials: 'include',
-                            body: {repr(put_body)},
-                        }}
+                            body: params.body,
+                        }
                     );
                     const text = await resp.text();
-                    return {{ status: resp.status, body: text.substring(0, 600) }};
-                }} catch(e) {{
-                    return {{ error: String(e) }};
-                }}
-            }}
-        """)
+                    return { status: resp.status, body: text.substring(0, 600) };
+                } catch(e) {
+                    return { error: String(e) };
+                }
+            }
+        """, {"article_id": article_id, "body": put_body_json})
+
+        print(f"[PW-fetch] PUT result: status={result.get('status')}, body={result.get('body', result.get('error',''))[:300]}")
+
+        if result.get('status') in (200, 201, 204):
+            browser.close()
+            print("✅ ブラウザ内 fetch で記事更新成功")
+            return True
+
+        # PATCH も試みる
+        result2 = page.evaluate("""
+            async (params) => {
+                try {
+                    const resp = await fetch(
+                        '/api/v1/text_notes/' + params.article_id,
+                        {
+                            method: 'PATCH',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'Accept': 'application/json, text/plain, */*',
+                                'X-Requested-With': 'XMLHttpRequest',
+                            },
+                            credentials: 'include',
+                            body: params.body,
+                        }
+                    );
+                    const text = await resp.text();
+                    return { status: resp.status, body: text.substring(0, 600) };
+                } catch(e) {
+                    return { error: String(e) };
+                }
+            }
+        """, {"article_id": article_id, "body": put_body_json})
+
+        print(f"[PW-fetch] PATCH result: status={result2.get('status')}, body={result2.get('body', result2.get('error',''))[:300]}")
+
         browser.close()
 
-    print(f"[PW-fetch] status: {result.get('status')}")
-    print(f"[PW-fetch] body: {result.get('body', result.get('error', ''))[:400]}")
-
-    if result.get('status') in (200, 201, 204):
-        print(f"✅ ブラウザ内 fetch で記事更新成功")
+    if result2.get('status') in (200, 201, 204):
+        print("✅ ブラウザ内 PATCH で記事更新成功")
         return True
     return False
 
@@ -369,10 +416,13 @@ def main():
         if resp.status_code == 200:
             article_data = resp.json().get('data', {})
             article_id = article_data.get('id')
+            article_title = article_data.get('name', '')
             body = article_data.get('body', '')
             fixed_body = fix_cross_links_html(body)
             if fixed_body != body and article_id:
-                ok = save_via_playwright_fetch(NOTE_KEY, cookies, fixed_body, article_id)
+                ok = save_via_playwright_fetch(
+                    NOTE_KEY, cookies, fixed_body, article_id, article_title
+                )
                 if ok:
                     sys.exit(0)
 

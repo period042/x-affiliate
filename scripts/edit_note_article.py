@@ -173,7 +173,15 @@ def save_and_publish_via_playwright(note_key: str, cookies: dict, fixed_body: st
             route.continue_()
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        browser = p.chromium.launch(
+            headless=True,
+            args=[
+                '--disable-blink-features=AutomationControlled',
+                '--no-first-run',
+                '--no-default-browser-check',
+                '--disable-dev-shm-usage',
+            ]
+        )
         storage = {'cookies': [
             {'name': k, 'value': v, 'domain': '.note.com',
              'path': '/', 'httpOnly': False, 'secure': True}
@@ -181,9 +189,20 @@ def save_and_publish_via_playwright(note_key: str, cookies: dict, fixed_body: st
         ]}
         context = browser.new_context(
             storage_state=storage,
-            viewport={'width': 1280, 'height': 900}
+            viewport={'width': 1280, 'height': 900},
+            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         )
         page = context.new_page()
+        # Playwright の webdriver 検知を無効化
+        page.add_init_script(
+            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+        )
+
+        # 全 API リクエストをログ（デバッグ用）
+        def log_request(req):
+            if '/api/' in req.url and req.method in ('POST', 'PUT', 'PATCH'):
+                print(f"[NET] {req.method} {req.url[:100]}")
+        page.on('request', log_request)
 
         # text_notes への全書き込みをインターセプト
         page.route('**/api/v1/text_notes**', handle_note_api)
@@ -297,7 +316,42 @@ def save_and_publish_via_playwright(note_key: str, cookies: dict, fixed_body: st
                     print(f"[route] 確定ボタンクリックエラー: {e}")
 
             if not confirm_clicked:
-                print("[route] 確定ボタンが見つかりません")
+                print("[route] 確定ボタンが見つかりません — browser fetch で PATCH を試みます")
+                # Playwright ブラウザ内から PATCH して status を published に変更
+                patch_result = page.evaluate(f"""async () => {{
+                    try {{
+                        const resp = await fetch('https://note.com/api/v1/text_notes/{article_id}', {{
+                            method: 'PATCH',
+                            credentials: 'include',
+                            headers: {{
+                                'Content-Type': 'application/json',
+                                'Accept': 'application/json, text/plain, */*',
+                            }},
+                            body: JSON.stringify({{text_note: {{status: 'published'}}}})
+                        }});
+                        const txt = await resp.text();
+                        return {{status: resp.status, body: txt.substring(0, 200)}};
+                    }} catch(e) {{ return {{error: String(e)}}; }}
+                }}""")
+                print(f"[route] browser PATCH result: {patch_result}")
+
+                # fallback: draft_save の is_temp_saved=false でも試す
+                publish_save_result = page.evaluate(f"""async () => {{
+                    try {{
+                        const resp = await fetch('https://note.com/api/v1/text_notes/draft_save?id={article_id}&is_temp_saved=false', {{
+                            method: 'POST',
+                            credentials: 'include',
+                            headers: {{
+                                'Content-Type': 'application/json',
+                                'Accept': 'application/json, text/plain, */*',
+                            }},
+                            body: JSON.stringify({{body: {json.dumps(fixed_body)}, status: 'published'}})
+                        }});
+                        const txt = await resp.text();
+                        return {{status: resp.status, body: txt.substring(0, 200)}};
+                    }} catch(e) {{ return {{error: String(e)}}; }}
+                }}""")
+                print(f"[route] browser draft_save(false) result: {publish_save_result}")
 
             print("[route] 公開処理待機 (25s)...")
             page.wait_for_timeout(25000)

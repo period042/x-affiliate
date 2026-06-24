@@ -202,33 +202,55 @@ def main():
             ss(page, '05_content_filled')
             print("  完了")
 
-            # 公開ボタンをクリック
+            # 公開ボタンをクリック（モーダルが開くまで最大15秒待機）
             print("[6] 公開に進む...")
+            clicked_step6 = False
             for sel in ['button:has-text("公開に進む")', 'button:has-text("公開設定")', 'button:has-text("公開する")']:
                 try:
                     page.click(sel, timeout=4000)
-                    page.wait_for_timeout(3000)
                     print(f"  {sel} クリック成功")
+                    clicked_step6 = True
                     break
                 except Exception:
                     pass
+
+            if clicked_step6:
+                # モーダルの確定ボタンが出現するまで待つ
+                confirm_sel = None
+                for sel in ['button:has-text("更新する")', 'button:has-text("公開する")', 'button:has-text("保存する")']:
+                    try:
+                        page.wait_for_selector(sel, timeout=15000)
+                        confirm_sel = sel
+                        print(f"  モーダル確認: {sel} が出現")
+                        break
+                    except Exception:
+                        pass
 
             ss(page, '06_publish_modal')
 
             # 公開確定
             print("[7] 公開確定...")
-            for sel in ['button:has-text("公開する")', 'button:has-text("保存する")', 'button:has-text("更新する")']:
+            published = False
+            for sel in ['button:has-text("更新する")', 'button:has-text("公開する")', 'button:has-text("保存する")']:
                 try:
-                    page.click(sel, timeout=5000)
-                    page.wait_for_timeout(3000)
+                    page.click(sel, timeout=8000)
+                    page.wait_for_timeout(5000)
                     print(f"  {sel} クリック成功")
+                    published = True
                     break
                 except Exception:
                     pass
 
+            if not published:
+                print("  [WARN] 公開確定ボタンが見つかりませんでした")
+
             ss(page, '07_published')
             print(f"  最終URL: {page.url[:80]}")
-            print(f"✅ 記事 {NOTE_KEY} の修正完了")
+            if published:
+                print(f"✅ 記事 {NOTE_KEY} の修正完了")
+            else:
+                print(f"⚠️ 記事 {NOTE_KEY} の公開確定未完了（手動確認が必要）")
+                sys.exit(1)
 
         except Exception as e:
             print(f"[ERR] {e}")

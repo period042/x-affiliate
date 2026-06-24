@@ -79,22 +79,30 @@ def main():
         context = browser.new_context(**ctx_kwargs)
         page = context.new_page()
 
-        # ネットワーク傍受（PUT ボディを取得）
-        put_bodies = {}
-        put_responses = {}
+        # ネットワーク傍受（API呼び出しを全部記録）
+        api_log = []     # [(method, url)]
+        put_bodies = {}  # {id_or_key: body_str}
+        get_responses = {}  # {id_or_key: (status, body_str)}
 
         def on_request(req):
-            m = re.search(r'/text_notes/(\d+)$', req.url)
-            if m and req.method == 'PUT':
-                put_bodies[m.group(1)] = req.post_data or ''
+            if '/api/' in req.url:
+                api_log.append(f"{req.method} {req.url}")
+                m_id = re.search(r'/text_notes/(\d+)$', req.url)
+                m_key = re.search(r'/text_notes/([a-z0-9]+)$', req.url)
+                key = (m_id or m_key)
+                if key and req.method == 'PUT':
+                    put_bodies[key.group(1)] = req.post_data or ''
 
         def on_response(resp):
-            m = re.search(r'/text_notes/(\d+)$', resp.url)
-            if m and resp.request.method in ('GET', 'PUT'):
-                try:
-                    put_responses[m.group(1)] = (resp.status, resp.text())
-                except Exception:
-                    pass
+            if '/api/' in resp.url:
+                m_id = re.search(r'/text_notes/(\d+)$', resp.url)
+                m_key = re.search(r'/text_notes/([a-z0-9]+)$', resp.url)
+                key = (m_id or m_key)
+                if key and resp.request.method in ('GET', 'PUT'):
+                    try:
+                        get_responses[key.group(1)] = (resp.status, resp.text())
+                    except Exception:
+                        pass
 
         page.on('request', on_request)
         page.on('response', on_response)
@@ -134,38 +142,13 @@ def main():
             ss(page, '01_edit_loaded')
             print(f"  現在URL: {page.url[:80]}")
 
-            # 数値IDを取得（GETで傍受）
-            numeric_id = None
-            for nid in put_responses:
-                if nid.isdigit():
-                    numeric_id = nid
-                    break
-            print(f"  数値ID: {numeric_id}")
+            # APIリクエストのログ表示
+            print(f"  API呼び出し一覧 ({len(api_log)}件):")
+            for call in api_log[:20]:
+                print(f"    {call}")
+            print(f"  取得したレスポンス keys: {list(get_responses.keys())[:10]}")
 
-            if not numeric_id:
-                print("[ERR] 数値IDを取得できませんでした（GETレスポンス: {list(put_responses.keys())[:5]}）")
-                sys.exit(1)
-
-            # 現在のコンテンツを取得してクロスリンクを修正
-            _, current_body = put_responses[numeric_id]
-            try:
-                body_dict = json.loads(current_body)
-            except Exception:
-                print(f"[ERR] GETレスポンスのパース失敗: {current_body[:200]}")
-                sys.exit(1)
-
-            # body_dict の構造から body フィールドを確認
-            data = body_dict.get('data', body_dict)
-            print(f"  本文フィールド: {list(data.keys())[:10]}")
-
-            # body (ProseMirror JSON) を文字列として操作
-            body_str = json.dumps(body_dict, ensure_ascii=False)
-            # インラインクロスリンクのパターンを検索
-            if '（関連記事:' in body_str or '（関連記事：' in body_str:
-                print("  クロスリンクの問題フォーマットを検出")
-            else:
-                print("  問題フォーマットが見つかりません。既に修正済みの可能性あり")
-                sys.exit(0)
+            # クロスリンク問題はAPIで確認せず、ソースファイルから確認して修正進める
 
             # ProseMirrorのテキストノードを直接修正するのは複雑なため、
             # エディタで全選択→削除→正しいコンテンツを再入力する方式を採用

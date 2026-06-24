@@ -195,22 +195,22 @@ def save_and_publish_via_playwright(note_key: str, cookies: dict, fixed_body: st
         page.wait_for_timeout(5000)
         page.screenshot(path='/tmp/edit_step1_loaded.png')
 
-        # trivial edit でエディタをダーティ状態にする
+        print(f"[route] ページ URL: {page.url}")
+
+        # エディタの末尾にスペースを追加してダーティ状態にする（Backspace しない）
         try:
             editor_el = page.locator('.ProseMirror, [contenteditable="true"]').first
             editor_el.click(timeout=5000)
             page.keyboard.press('End')
             page.keyboard.type(' ')
-            page.wait_for_timeout(300)
-            page.keyboard.press('Backspace')
             page.wait_for_timeout(1000)
-            print("[route] trivial edit 完了")
+            print("[route] trivial edit (space 追加): 完了")
         except Exception as e:
             print(f"[route] エディタ操作スキップ: {e}")
 
         # 下書き保存ボタンをクリック
         save_clicked = False
-        for sel in ['button:has-text("保存")', 'button:has-text("下書き保存")', '[aria-label="保存"]']:
+        for sel in ['button:has-text("一時保存")', 'button:has-text("保存")', 'button:has-text("下書き保存")', '[aria-label="保存"]']:
             try:
                 btn = page.locator(sel).first
                 if btn.is_visible(timeout=2000):
@@ -228,8 +228,8 @@ def save_and_publish_via_playwright(note_key: str, cookies: dict, fixed_body: st
         print("[route] draft_save 待機 (15s)...")
         page.wait_for_timeout(15000)
         page.screenshot(path='/tmp/edit_step2_saved.png')
-
         print(f"[route] この時点の draft インターセプト数: {intercepted['draft']}")
+        print(f"[route] draft_save 後 URL: {page.url}")
 
         # 公開ボタンをクリック
         publish_btn_clicked = False
@@ -245,6 +245,7 @@ def save_and_publish_via_playwright(note_key: str, cookies: dict, fixed_body: st
                     print(f"[route] 公開ボタンクリック: {sel}")
                     btn.click(timeout=5000)
                     publish_btn_clicked = True
+                    print(f"[route] クリック後 URL: {page.url}")
                     break
             except Exception:
                 pass
@@ -252,44 +253,56 @@ def save_and_publish_via_playwright(note_key: str, cookies: dict, fixed_body: st
         if not publish_btn_clicked:
             print("[route] 公開ボタンが見つかりません")
             page.screenshot(path='/tmp/edit_step3_no_publish_btn.png')
-            # ページ上のボタン一覧をデバッグ出力
             btns = page.locator('button').all_text_contents()
             print(f"[route] 現在のボタン一覧: {btns[:20]}")
         else:
-            # モーダルが開くまで待機
-            page.wait_for_timeout(3000)
-            page.screenshot(path='/tmp/edit_step3_modal.png')
-
-            # モーダル内の確定ボタンをクリック
-            confirm_clicked = False
-            for sel in [
-                'button:has-text("更新する")',
-                'button:has-text("公開する")',
-                'button:has-text("投稿する")',
-                '[data-testid="update-button"]',
-            ]:
+            # パネルが開くまで wait_for_selector で待機 (最大15秒)
+            confirm_sel = None
+            for candidate in ['button:has-text("更新する")', 'button:has-text("公開する")', 'button:has-text("投稿する")']:
                 try:
-                    # 複数ある場合は最後のもの（モーダル内）
-                    btns_found = page.locator(sel)
+                    page.wait_for_selector(candidate, timeout=15000)
+                    # 同名ボタンが複数ある (保存前 + パネル内) 可能性あり
+                    btns_found = page.locator(candidate)
                     count = btns_found.count()
-                    if count > 0:
-                        target = btns_found.last if count > 1 else btns_found.first
-                        if target.is_visible(timeout=3000):
-                            print(f"[route] 確定ボタンクリック: {sel} (count={count})")
-                            target.click(timeout=5000)
-                            confirm_clicked = True
-                            break
+                    print(f"[route] {candidate} が {count} 件見つかりました")
+                    confirm_sel = candidate
+                    break
                 except Exception as e:
-                    print(f"[route] 確定ボタンエラー ({sel}): {e}")
+                    print(f"[route] wait_for_selector ({candidate}): {e}")
+
+            page.screenshot(path='/tmp/edit_step3_modal.png')
+            print(f"[route] パネル後 URL: {page.url}")
+
+            # 全ボタン・ロールボタンをスキャン
+            all_btns = page.evaluate("""() => {
+                const els = document.querySelectorAll('button, [role="button"]');
+                return Array.from(els)
+                    .map(e => e.innerText.trim())
+                    .filter(t => t.length > 0 && t.length < 30);
+            }""")
+            print(f"[route] 全クリック要素: {all_btns[:30]}")
+
+            confirm_clicked = False
+            if confirm_sel:
+                try:
+                    btns_found = page.locator(confirm_sel)
+                    count = btns_found.count()
+                    # 2つ以上ある場合は最後（パネル内ボタン）
+                    target = btns_found.last if count > 1 else btns_found.first
+                    if target.is_visible(timeout=5000):
+                        print(f"[route] 確定ボタンクリック: {confirm_sel} (count={count})")
+                        target.click(timeout=5000)
+                        confirm_clicked = True
+                except Exception as e:
+                    print(f"[route] 確定ボタンクリックエラー: {e}")
 
             if not confirm_clicked:
                 print("[route] 確定ボタンが見つかりません")
-                btns = page.locator('button').all_text_contents()
-                print(f"[route] モーダル内ボタン一覧: {btns[:20]}")
 
-            print("[route] 公開処理待機 (20s)...")
-            page.wait_for_timeout(20000)
+            print("[route] 公開処理待機 (25s)...")
+            page.wait_for_timeout(25000)
             page.screenshot(path='/tmp/edit_step4_published.png')
+            print(f"[route] 公開後 URL: {page.url}")
 
         browser.close()
 

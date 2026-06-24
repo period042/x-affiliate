@@ -142,6 +142,19 @@ def main():
             ss(page, '01_edit_loaded')
             print(f"  現在URL: {page.url[:80]}")
 
+            # 「AIと相談」ダイアログがあれば閉じる
+            try:
+                close_btn = page.locator('button:has-text("×"), button[aria-label="閉じる"], .modal-close, [data-testid="close"]')
+                if close_btn.count() > 0:
+                    close_btn.first.click()
+                    page.wait_for_timeout(500)
+                    print("  AIダイアログを閉じました")
+            except Exception:
+                pass
+            # Escapeでオーバーレイを閉じる
+            page.keyboard.press('Escape')
+            page.wait_for_timeout(500)
+
             # APIリクエストのログ表示
             print(f"  API呼び出し一覧 ({len(api_log)}件):")
             for call in api_log[:20]:
@@ -202,25 +215,48 @@ def main():
             ss(page, '05_content_filled')
             print("  完了")
 
-            # 公開ボタンをクリック（モーダルが開くまで最大15秒待機）
+            # OGP読み込み待機 + エディタのフォーカスを外す
+            print("[5.5] OGP読み込み待機...")
+            try:
+                page.wait_for_load_state('networkidle', timeout=20000)
+            except Exception:
+                page.wait_for_timeout(5000)
+            # エディタ外をクリックしてフォーカスを外す
+            page.mouse.click(640, 30)
+            page.wait_for_timeout(1000)
+            ss(page, '05b_before_publish')
+
+            # 公開ボタンをクリック（モーダルが開くまで最大20秒待機）
             print("[6] 公開に進む...")
             clicked_step6 = False
             for sel in ['button:has-text("公開に進む")', 'button:has-text("公開設定")', 'button:has-text("公開する")']:
                 try:
-                    page.click(sel, timeout=4000)
+                    page.click(sel, timeout=6000)
                     print(f"  {sel} クリック成功")
                     clicked_step6 = True
                     break
                 except Exception:
                     pass
 
+            if not clicked_step6:
+                # JavaScriptで強制クリック
+                result = page.evaluate("""
+                    () => {
+                        const buttons = Array.from(document.querySelectorAll('button'));
+                        const btn = buttons.find(b => b.textContent.includes('公開に進む') || b.textContent.includes('公開設定'));
+                        if (btn) { btn.click(); return btn.textContent.trim(); }
+                        return null;
+                    }
+                """)
+                if result:
+                    print(f"  JS強制クリック: {result}")
+                    clicked_step6 = True
+
             if clicked_step6:
                 # モーダルの確定ボタンが出現するまで待つ
-                confirm_sel = None
                 for sel in ['button:has-text("更新する")', 'button:has-text("公開する")', 'button:has-text("保存する")']:
                     try:
-                        page.wait_for_selector(sel, timeout=15000)
-                        confirm_sel = sel
+                        page.wait_for_selector(sel, timeout=20000)
                         print(f"  モーダル確認: {sel} が出現")
                         break
                     except Exception:

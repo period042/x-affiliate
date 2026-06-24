@@ -114,11 +114,28 @@ def get_session_via_playwright(cookies: dict) -> dict:
             page.click('button[type="submit"]')
             page.wait_for_load_state('networkidle', timeout=20000)
 
-        # 編集ページを開いてセッション・XSRF トークンを確立
+        # 編集ページを開いてセッション確立
         edit_url = f'https://editor.note.com/notes/{NOTE_KEY}/edit'
         print(f"[P] 編集ページ: {edit_url}")
         page.goto(edit_url, wait_until='networkidle', timeout=30000)
         page.wait_for_timeout(3000)
+
+        # ブラウザ内 cookie を確認（HttpOnly含む全クッキー）
+        browser_cookies = context.cookies()
+        print(f"[P] ブラウザ cookie: {[c['name'] for c in browser_cookies if 'note.com' in c.get('domain','')]}")
+
+        # CSRF token を meta タグから取得
+        csrf = page.evaluate("""() => {
+            const m = document.querySelector('meta[name="csrf-token"]');
+            if (m) return m.getAttribute('content');
+            // window.__reactFiber__ から探すパターン
+            if (window.csrfToken) return window.csrfToken;
+            return null;
+        }""")
+        if csrf:
+            print(f"[P] CSRF token (meta): {csrf[:20]}...")
+            import builtins
+            builtins._NOTE_CSRF_TOKEN = csrf
 
         all_cookies = context.cookies()
         browser.close()
@@ -129,6 +146,71 @@ def get_session_via_playwright(cookies: dict) -> dict:
     print(f"[P] セッション確立完了 ({len(fresh)} cookies)")
     print(f"[P] cookie keys: {list(fresh.keys())}")
     return fresh
+
+
+def save_via_playwright_fetch(note_key: str, cookies: dict, fixed_body: str, article_id: int) -> bool:
+    """
+    Playwright ブラウザ内から fetch を実行する。
+    editor.note.com ページからのリクエストなので、CORS と CSRF が正しく処理される。
+    """
+    from playwright.sync_api import sync_playwright
+
+    print("[PW-fetch] ブラウザ内 fetch で PUT を試みます...")
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        storage = {'cookies': [
+            {'name': k, 'value': v, 'domain': '.note.com',
+             'path': '/', 'httpOnly': False, 'secure': True}
+            for k, v in cookies.items()
+        ]}
+        context = browser.new_context(storage_state=storage, viewport={'width': 1280, 'height': 900})
+        page = context.new_page()
+
+        edit_url = f'https://editor.note.com/notes/{note_key}/edit'
+        page.goto(edit_url, wait_until='networkidle', timeout=30000)
+        page.wait_for_timeout(3000)
+
+        # ブラウザ内から note.com API へ fetch
+        # editor.note.com → note.com は CORS で許可されているはず
+        put_body = json.dumps({
+            "text_note": {
+                "body": fixed_body,
+                "status": "published"
+            }
+        })
+
+        result = page.evaluate(f"""
+            async () => {{
+                try {{
+                    const resp = await fetch(
+                        'https://note.com/api/v1/text_notes/{article_id}',
+                        {{
+                            method: 'PUT',
+                            headers: {{
+                                'Content-Type': 'application/json',
+                                'Accept': 'application/json, text/plain, */*',
+                                'X-Requested-With': 'XMLHttpRequest',
+                            }},
+                            credentials: 'include',
+                            body: {repr(put_body)},
+                        }}
+                    );
+                    const text = await resp.text();
+                    return {{ status: resp.status, body: text.substring(0, 600) }};
+                }} catch(e) {{
+                    return {{ error: String(e) }};
+                }}
+            }}
+        """)
+        browser.close()
+
+    print(f"[PW-fetch] status: {result.get('status')}")
+    print(f"[PW-fetch] body: {result.get('body', result.get('error', ''))[:400]}")
+
+    if result.get('status') in (200, 201, 204):
+        print(f"✅ ブラウザ内 fetch で記事更新成功")
+        return True
+    return False
 
 
 def api_update(note_key: str, cookies: dict) -> bool:
@@ -143,15 +225,23 @@ def api_update(note_key: str, cookies: dict) -> bool:
         'Origin': 'https://editor.note.com',
     }
 
-    # XSRF トークン付与 (cookie名バリエーション対応)
-    for xsrf_key in ('XSRF-TOKEN', '_xsrf', 'csrf_token', 'csrftoken'):
-        xsrf = cookies.get(xsrf_key, '')
-        if xsrf:
-            base_headers['X-XSRF-TOKEN'] = xsrf
-            print(f"[API] XSRF-TOKEN ({xsrf_key}): {xsrf[:20]}...")
-            break
+    # CSRF / XSRF トークン付与
+    # 1. Playwright が取得した meta csrf-token を優先
+    import builtins
+    csrf_from_page = getattr(builtins, '_NOTE_CSRF_TOKEN', '')
+    if csrf_from_page:
+        base_headers['X-CSRF-Token'] = csrf_from_page
+        print(f"[API] X-CSRF-Token (meta): {csrf_from_page[:20]}...")
     else:
-        print("[WARN] XSRF-TOKEN クッキーが見つかりません")
+        # 2. cookie フォールバック
+        for xsrf_key in ('XSRF-TOKEN', '_xsrf', 'csrf_token', 'csrftoken'):
+            xsrf = cookies.get(xsrf_key, '')
+            if xsrf:
+                base_headers['X-XSRF-TOKEN'] = xsrf
+                print(f"[API] XSRF-TOKEN ({xsrf_key}): {xsrf[:20]}...")
+                break
+        else:
+            print("[WARN] CSRF/XSRF トークンが見つかりません — 422 になる可能性あり")
 
     # --- GET: v3 エンドポイントで記事取得 ---
     get_url = f"https://note.com/api/v3/notes/{note_key}"
@@ -228,8 +318,8 @@ def api_update(note_key: str, cookies: dict) -> bool:
             if put_resp.status_code in (200, 201, 204):
                 print(f"✅ 記事 {note_key} の更新成功 ({put_url})")
                 return True
-            elif put_resp.status_code == 405:
-                print("  405 Method Not Allowed — PATCH を試みます")
+            elif put_resp.status_code in (405, 422):
+                print(f"  {put_resp.status_code} — PATCH を試みます")
                 patch_resp = requests.patch(
                     put_url,
                     cookies=cookies, headers=put_headers,
@@ -246,8 +336,8 @@ def api_update(note_key: str, cookies: dict) -> bool:
         except Exception as e:
             print(f"  例外: {e}")
 
-    print("[ERR] 全 PUT エンドポイントで失敗")
-    return False
+    print("[ERR] 全 PUT エンドポイントで失敗 — ブラウザ内 fetch を試みます")
+    return None  # None = try Playwright fetch
 
 
 def main():
@@ -267,9 +357,26 @@ def main():
         print(f"[WARN] Playwright セッション確立失敗: {e}")
         print("  保存済みクッキーで API 試行します")
 
-    success = api_update(NOTE_KEY, cookies)
-    if not success:
-        sys.exit(1)
+    # API で直接更新
+    result = api_update(NOTE_KEY, cookies)
+    if result is True:
+        sys.exit(0)
+
+    # フォールバック: ブラウザ内 fetch (CORS/CSRF を正しく処理)
+    if result is None:
+        import requests as _req
+        resp = _req.get(f"https://note.com/api/v3/notes/{NOTE_KEY}", timeout=20)
+        if resp.status_code == 200:
+            article_data = resp.json().get('data', {})
+            article_id = article_data.get('id')
+            body = article_data.get('body', '')
+            fixed_body = fix_cross_links_html(body)
+            if fixed_body != body and article_id:
+                ok = save_via_playwright_fetch(NOTE_KEY, cookies, fixed_body, article_id)
+                if ok:
+                    sys.exit(0)
+
+    sys.exit(1)
 
 
 if __name__ == '__main__':

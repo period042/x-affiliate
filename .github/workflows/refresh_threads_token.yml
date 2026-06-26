@@ -41,15 +41,8 @@ jobs:
           fi
           echo "トークン取得OK (expires_in=${INITIAL_EXPIRES}秒)"
 
-          # expires_in が存在しないか大きい場合は既に長期トークン
-          if [ "$INITIAL_EXPIRES" = "none" ] || [ "${INITIAL_EXPIRES:-0}" -gt 86400 ] 2>/dev/null; then
-            echo "→ 長期トークンを直接取得 (変換不要)"
-            echo "TOKEN=$SHORT_TOKEN" >> $GITHUB_ENV
-            echo "TOKEN_TYPE=long-lived (from auth_code)" >> $GITHUB_ENV
-            exit 0
-          fi
-
-          echo "[2/3] 長期トークンへ変換 (GET)..."
+          # expires_in=none でも session-dependent なため必ず th_long_lived_token を試みる
+          echo "[2/3] 長期トークンへ変換 (GET) — Liveモードで session 非依存トークンを取得..."
           LONG_RESP=$(curl -s "https://graph.threads.net/access_token?grant_type=th_long_lived_token&client_secret=$APP_SECRET&access_token=$SHORT_TOKEN")
           LONG_TOKEN=$(echo "$LONG_RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('access_token',''))")
 

@@ -37,18 +37,16 @@ jobs:
           sudo apt-get update -q
           sudo apt-get install -y -q fonts-noto-cjk
 
-      - name: Cache Playwright browsers
-        id: playwright-cache
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-chromium-${{ runner.os }}-v1
-
       - name: Install Python dependencies
         run: pip install playwright pillow requests
 
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ runner.os }}-${{ hashFiles('**/requirements*.txt') }}-v2
+
       - name: Install Playwright browsers
-        if: steps.playwright-cache.outputs.cache-hit != 'true'
         run: |
           python -m playwright install chromium
           python -m playwright install-deps chromium

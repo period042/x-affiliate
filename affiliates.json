@@ -1,0 +1,83 @@
+{
+  "lancul": {
+    "name": "LanCul英会話",
+    "url": "https://px.a8.net/svt/ejp?a8mat=4B5LK6+1QIK2I+4FL0+5YJRM",
+    "cta": "無料体験はこちら（PR）"
+  },
+  "aques": {
+    "name": "AQUES（アクエス）",
+    "url": "https://px.a8.net/svt/ejp?a8mat=4B5LK6+1R3ZOA+4D4Y+61C2Q",
+    "cta": "詳細・申し込みはこちら（PR）"
+  },
+  "campustop": {
+    "name": "CampusTop（QQEnglish）",
+    "url": "https://px.a8.net/svt/ejp?a8mat=4B5LK6+1FSQEQ+4HHM+TRVYQ",
+    "cta": "無料個別相談はこちら（PR）"
+  },
+  "qqenglish": {
+    "name": "QQ English",
+    "url": "https://px.a8.net/svt/ejp?a8mat=4B5LK6+1PX4GQ+4HHM+60H7M",
+    "cta": "お申し込みはこちら（PR）"
+  },
+  "studysapuri": {
+    "name": "スタディサプリEnglish ビジネス英語",
+    "url": "https://px.a8.net/svt/ejp?a8mat=4B5LK4+FK8XSQ+3AQG+TRVYQ",
+    "cta": "詳細はこちら（PR）"
+  },
+  "posiwill": {
+    "name": "POSIWILL CAREER（ポジウィルキャリア）",
+    "url": "https://px.a8.net/svt/ejp?a8mat=4B41ZC+987X3U+5H76+5YJRM",
+    "cta": "無料相談はこちら（PR）"
+  },
+  "techgo": {
+    "name": "TechGO（テックゴー）",
+    "url": "https://px.a8.net/svt/ejp?a8mat=4B5LK6+5CB1Y2+5B0Y+HWPVM",
+    "cta": "無料登録はこちら（PR）"
+  },
+  "stars": {
+    "name": "キャリアアップ英語コーチング スターズ",
+    "url": "https://px.a8.net/svt/ejp?a8mat=4B5LK5+758T6+4FL0+NTRMQ",
+    "cta": "無料カウンセリングはこちら（PR）"
+  },
+  "fundrop": {
+    "name": "不動産クラウドファンディング FUNDROP",
+    "url": "https://px.a8.net/svt/ejp?a8mat=4B41ZC+8WWOM2+4SNA+5Z6WY",
+    "cta": "無料登録はこちら（PR）"
+  },
+  "solar": {
+    "name": "ゼロスタート ソーラー（東京都限定・初期費用ゼロで太陽光発電＋蓄電池）",
+    "url": "https://px.a8.net/svt/ejp?a8mat=4B5TCC+FRE522+5R80+5YJRM",
+    "cta": "東京都限定・初期費用ゼロで太陽光＋蓄電池を設置（PR）",
+    "note": "東京都在住の自宅所有者向け。電気代削減・売電収入。家選び・投資・固定費削減の文脈で自然に挿入できる。"
+  },
+  "rakusapo": {
+    "name": "ラクサポ（間取り作成・見積もり一括依頼サービス）",
+    "url": "https://px.a8.net/svt/ejp?a8mat=4B5TCC+FM18M2+2ISC+NTJWY",
+    "cta": "間取り作成・見積もりを一括依頼（PR）",
+    "note": "注文住宅・工務店選び・間取り検討中の人向け。家建設計画・ハウスメーカー比較の文脈で活用できる。"
+  },
+  "housing_bazaar_local": {
+    "name": "ハウジングバザール（地方の優良工務店情報）",
+    "url": "https://px.a8.net/svt/ejp?a8mat=4B5TCC+FA4KII+2ISC+67JUA",
+    "cta": "地方の優良工務店をまとめて比較（PR）",
+    "note": "地方移住・地方での家建設を検討している人向け。地方での注文住宅・工務店選びの文脈で活用できる。"
+  },
+  "housing_bazaar_national": {
+    "name": "ハウジングバザール（全国の優良工務店情報）",
+    "url": "https://px.a8.net/svt/ejp?a8mat=4B5TCC+FJNI6Y+2ISC+BWVTE",
+    "cta": "全国の優良工務店をまとめて比較（PR）",
+    "note": "全国の注文住宅・工務店比較。ハウスメーカー選定・工務店の見積もり比較の文脈で活用できる。"
+  },
+  "findit": {
+    "name": "ファインドイット（FP無料相談・資産形成）",
+    "url": "https://px.a8.net/svt/ejp?a8mat=4B5LK6+5E3CRE+5MAS+5ZEMQ",
+    "cta": "マネーのプロに無料相談する（PR）",
+    "note": "FP無料相談サービス。資産形成・老後資金・投資・保険見直しの文脈で活用。無料でハーゲンダッツギフト券プレゼント特典あり。外資系給与・RSU・ESPP運用相談の文脈にも合う。"
+  },
+  "sumai_iroha": {
+    "name": "すまいのいろはPlus",
+    "url": "https://px.a8.net/svt/ejp?a8mat=4B5TCC+EQH9JU+5V18+5YJRM",
+    "cta": "家づくりの基本を無料で学ぶ（PR）",
+    "note": "家を建てることを考え始めた人向けの住宅情報サービス。注文住宅・家選び・ハウスメーカー検討の入口として活用できる。"
+  }
+}

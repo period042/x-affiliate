@@ -713,8 +713,8 @@ def post_article(article_path):
             browser.close()
 
 
-def _add_note_promo_to_x_queue(article_path: Path):
-    """note投稿成功後、X告知ツイートをキューに追加（Action4: X→note誘導ループ）"""
+def _add_note_promo_to_threads_queue(article_path: Path):
+    """note投稿成功後、Threads告知投稿をキューに追加（Action4: Threads→note誘導ループ）"""
     try:
         with open(NOTE_POSTED_DIR / article_path.name, encoding='utf-8') as f:
             posted = json.load(f)
@@ -722,34 +722,52 @@ def _add_note_promo_to_x_queue(article_path: Path):
         title   = posted.get('title', '')
         url     = posted.get('url', '')
         genre   = posted.get('genre', '')
+        short_title = title[:40]
 
-        # 告知ツイートのテンプレート（ジャンル別）
+        # Threads告知テンプレート（ジャンル別・強いフックで記事への誘導）
         PROMO_TEMPLATES = {
-            'キャリア':          f"キャリアについてnoteに書きました。\n\n{title[:35]}\n\n外資系10年の視点でまとめています↓\n{url}\n\n#キャリア相談 #転職活動 #外資系転職",
-            '英語学習（大人）':  f"英語学習についてnoteに書きました。\n\n{title[:35]}\n\n外資系での実体験をもとに書いています↓\n{url}\n\n#英語学習 #英会話 #外資系",
-            '英語学習（子ども）':f"子どもの英語教育についてnoteに書きました。\n\n{title[:35]}\n\n外資系の親として選んだ基準を書いています↓\n{url}\n\n#英語教育 #子どもの英語 #オンライン英会話",
-            'default':           f"noteに記事を書きました。\n\n{title[:35]}\n\n外資系IT10年の経験から書いています↓\n{url}\n\n#英語学習 #外資系転職",
+            'キャリア': [
+                f"外資系10年で気づいたこと、noteに書いた。\n\n「{short_title}」\n\n転職を考えているなら読んでほしい内容。\n\n{url}",
+                "実体験ベースなので、よくある「〇〇すれば年収アップ」系の話とは違う。気になる方はどうぞ。",
+            ],
+            '英語学習（大人）': [
+                f"英語が伸びなかった理由、やっとわかった話をnoteに書いた。\n\n「{short_title}」\n\n外資系で英語を使い続けて気づいたことをまとめた。\n\n{url}",
+                "「英語学習系の記事はもう読み飽きた」という人にこそ読んでほしい内容。試験英語と実務英語は別物だった。",
+            ],
+            '英語学習（子ども）': [
+                f"外資系の親として、子どもの英語サービスを選んだ基準をnoteに書いた。\n\n「{short_title}」\n\n3年間の試行錯誤からたどり着いた結論。\n\n{url}",
+                "「続けられるか」だけを基準にしたら、選ぶサービスが変わった。コメントや感想があればぜひ。",
+            ],
+            '投資': [
+                f"外資系でRSU・ESPPをもらうようになってから、資産の考え方が変わった話をnoteに書いた。\n\n「{short_title}」\n\n{url}",
+                "円建て資産しか持っていない時期と今では、ニュースの見方が違う。具体的な設計を書いているので参考になれば。",
+            ],
+            'default': [
+                f"外資系IT10年の経験から書いた。\n\n「{short_title}」\n\n実体験ベースでまとめています。\n\n{url}",
+                "コメントや質問があればぜひ。同じような状況の人の参考になれば。",
+            ],
         }
 
-        key         = genre if genre in PROMO_TEMPLATES else 'default'
-        tweet_text  = PROMO_TEMPLATES[key]
-        fname       = f"{datetime.now().strftime('%Y-%m-%d_%H-%M')}_promo_note.json"
+        key    = genre if genre in PROMO_TEMPLATES else 'default'
+        tweets = PROMO_TEMPLATES[key]
+        fname  = f"{datetime.now().strftime('%Y-%m-%d_%H-%M')}_promo_note.json"
 
-        QUEUE_DIR = BASE_DIR / 'queue'
-        QUEUE_DIR.mkdir(exist_ok=True)
+        THREAD_QUEUE_DIR = BASE_DIR / 'thread_queue'
+        THREAD_QUEUE_DIR.mkdir(exist_ok=True)
         promo = {
-            'type':           'value',
-            'genre':          'note誘導',
-            'content':        tweet_text,
+            'type':           'thread',
+            'genre':          genre or 'note誘導',
+            'title':          title,
             'affiliate_note': 'note記事告知',
+            'tweets':         tweets,
             'created_at':     datetime.now().isoformat(),
         }
-        with open(QUEUE_DIR / fname, 'w', encoding='utf-8') as f:
+        with open(THREAD_QUEUE_DIR / fname, 'w', encoding='utf-8') as f:
             json.dump(promo, f, ensure_ascii=False, indent=2)
-        print(f"[X告知] キューに追加: {fname}")
+        print(f"[Threads告知] キューに追加: {fname}")
 
     except Exception as e:
-        print(f"[X告知] 追加スキップ（エラー）: {e}")
+        print(f"[Threads告知] 追加スキップ（エラー）: {e}")
 
 
 def main():
@@ -783,8 +801,8 @@ def main():
 
             post_article(article)
 
-            # ── Action4: note投稿成功後にX告知ツイートをキューに追加 ──
-            _add_note_promo_to_x_queue(article)
+            # ── Action4: note投稿成功後にThreads告知をキューに追加 ──
+            _add_note_promo_to_threads_queue(article)
             return  # 成功したら終了
 
         except SystemExit as e:

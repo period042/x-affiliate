@@ -216,24 +216,36 @@ def generate_post(article: dict) -> str:
     return f"{hook}\n\n{title}\n\n→ 記事はこちら\n{url}" if hook else f"{title}\n\n→ 記事はこちら\n{url}"
 
 
-def post_single(text: str) -> str:
-    """単発投稿 → threads_post_id を返す"""
-    r = requests.post(
-        f"https://graph.threads.net/v1.0/{THREADS_USER_ID}/threads",
-        params={"media_type": "TEXT", "text": text, "access_token": THREADS_ACCESS_TOKEN},
-        timeout=30,
-    )
-    r.raise_for_status()
-    container_id = r.json()['id']
-    time.sleep(3)
+def post_single(text: str, retry: int = 3) -> str:
+    """単発投稿 → threads_post_id を返す。500エラーは最大retry回リトライ。"""
+    for attempt in range(1, retry + 1):
+        r = requests.post(
+            f"https://graph.threads.net/v1.0/{THREADS_USER_ID}/threads",
+            params={"media_type": "TEXT", "text": text, "access_token": THREADS_ACCESS_TOKEN},
+            timeout=30,
+        )
+        if r.status_code == 500:
+            print(f"[WARN] コンテナ作成 500 (attempt {attempt}/{retry}): {r.text[:200]}")
+            if attempt < retry:
+                time.sleep(15 * attempt)
+                continue
+        r.raise_for_status()
+        container_id = r.json()['id']
+        time.sleep(3)
 
-    r2 = requests.post(
-        f"https://graph.threads.net/v1.0/{THREADS_USER_ID}/threads_publish",
-        params={"creation_id": container_id, "access_token": THREADS_ACCESS_TOKEN},
-        timeout=30,
-    )
-    r2.raise_for_status()
-    return r2.json()['id']
+        r2 = requests.post(
+            f"https://graph.threads.net/v1.0/{THREADS_USER_ID}/threads_publish",
+            params={"creation_id": container_id, "access_token": THREADS_ACCESS_TOKEN},
+            timeout=30,
+        )
+        if r2.status_code == 500:
+            print(f"[WARN] publish 500 (attempt {attempt}/{retry}): {r2.text[:200]}")
+            if attempt < retry:
+                time.sleep(15 * attempt)
+                continue
+        r2.raise_for_status()
+        return r2.json()['id']
+    raise requests.HTTPError(f"500 after {retry} retries", response=r2)
 
 
 def post_thread_chain(posts: list) -> list:

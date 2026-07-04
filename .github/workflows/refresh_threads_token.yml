@@ -26,7 +26,7 @@ jobs:
           APP_SECRET:            ${{ secrets.THREADS_APP_SECRET }}
           THREADS_ACCESS_TOKEN:  ${{ secrets.THREADS_ACCESS_TOKEN }}
         run: |
-          APP_ID="1510156694190451"
+          APP_ID="1005657055603772"
           REDIRECT_URI="https://localhost/"
 
           if [ -z "$AUTH_CODE" ]; then

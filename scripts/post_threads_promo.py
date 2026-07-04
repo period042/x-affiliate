@@ -30,6 +30,7 @@ else:
 
 NOTE_POSTED_DIR          = DATA_DIR / 'note_posted'
 THREADS_PROMO_POSTED_DIR = DATA_DIR / 'threads_promo_posted'
+THREADS_QUEUE_DIR        = DATA_DIR / 'threads_queue'
 
 PROMO_COOLDOWN_DAYS = 30
 
@@ -364,12 +365,65 @@ https://threads.net/oauth/authorize?client_id=1510156694190451&redirect_uri=http
         print(f"[WARN] Issue作成失敗: {e}")
 
 
+def get_queued_post() -> dict | None:
+    """threads_queue/からscheduled_for<=nowの最古ファイルを取得して返す"""
+    if not THREADS_QUEUE_DIR.exists():
+        return None
+    now = datetime.now()
+    candidates = []
+    for f in sorted(THREADS_QUEUE_DIR.glob('*.json')):
+        try:
+            d = json.loads(f.read_text(encoding='utf-8'))
+            sched = datetime.fromisoformat(d['scheduled_for'])
+            if sched <= now:
+                candidates.append((sched, f, d))
+        except Exception:
+            continue
+    if not candidates:
+        return None
+    candidates.sort()
+    _, path, data = candidates[0]
+    THREADS_PROMO_POSTED_DIR.mkdir(parents=True, exist_ok=True)
+    path.rename(THREADS_PROMO_POSTED_DIR / path.name)
+    return data
+
+
 def main():
     if not THREADS_USER_ID or not THREADS_ACCESS_TOKEN:
         print("[SKIP] THREADS_USER_ID または THREADS_ACCESS_TOKEN が未設定")
         sys.exit(0)
 
     THREADS_PROMO_POSTED_DIR.mkdir(parents=True, exist_ok=True)
+
+    # キューに投稿文がある場合は優先して使う
+    queued = get_queued_post()
+    if queued:
+        content   = queued['content']
+        note_url  = queued.get('note_url', '')
+        title     = queued.get('article_title', '')
+        print(f"[QUEUE] キュー投稿: {title}")
+        posts     = [p.strip() for p in content.split('---') if p.strip()]
+        is_thread = len(posts) > 1
+        try:
+            if is_thread:
+                post_ids   = post_thread_chain(posts)
+                threads_url = f"https://www.threads.net/t/{post_ids[0]}"
+            else:
+                post_id    = post_single(posts[0])
+                threads_url = f"https://www.threads.net/t/{post_id}"
+                post_ids   = [post_id]
+            print(f"[OK] Threads投稿成功: {threads_url}")
+            write_summary(
+                f"## Threads宣伝投稿\n✅ キュー投稿成功: {threads_url}\n"
+                f"- 記事: {title}\n- note URL: {note_url}"
+            )
+        except requests.HTTPError as e:
+            body   = e.response.text if e.response is not None else ''
+            status = e.response.status_code if e.response is not None else 0
+            print(f"[ERR] Threads投稿失敗: {status} {body}")
+            write_summary(f"## Threads宣伝投稿\n❌ 失敗: {status}\n{body}")
+            sys.exit(1)
+        return
 
     note_stats = fetch_note_stats()
     recently_promoted = get_recently_promoted_urls()

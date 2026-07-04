@@ -15,7 +15,7 @@ import os, sys, webbrowser, urllib.parse, requests
 APP_ID       = os.environ.get('THREADS_APP_ID', '')
 APP_SECRET   = os.environ.get('THREADS_APP_SECRET', '')
 REDIRECT_URI = os.environ.get('THREADS_REDIRECT_URI', 'https://localhost/')
-SCOPES       = 'threads_basic,threads_manage_replies,threads_manage_insights'
+SCOPES       = 'threads_basic,threads_content_publish,threads_manage_replies,threads_manage_insights'
 
 def main():
     # ① App IDとシークレットの確認
@@ -82,7 +82,7 @@ def main():
     print(f"  → 短期トークン取得OK (user_id={user_id})")
 
     # ④ 長期トークン取得（60日有効）
-    print("[2/2] 長期トークン取得中...")
+    print("[2/2] 長期トークン取得中 (th_long_lived_token)...")
     r2 = requests.get(
         "https://graph.threads.net/access_token",
         params={
@@ -92,16 +92,23 @@ def main():
         },
         timeout=30,
     )
-    if not r2.ok:
-        print(f"エラー: {r2.status_code} {r2.text}")
-        sys.exit(1)
-    data       = r2.json()
-    long_token = data.get('access_token', '')
-    expires_in = data.get('expires_in', 0)
-    days       = expires_in // 86400
+    data2 = r2.json()
+    long_token = data2.get('access_token', '')
+    if not long_token:
+        print(f"  長期トークン取得失敗: {r2.status_code} {r2.text}")
+        print("  短期トークンをそのまま登録します（有効期間: 約1時間）")
+        long_token = short_token
+        days = 0
+    else:
+        expires_in = data2.get('expires_in', 0)
+        days       = expires_in // 86400
+        print(f"  ✅ 長期トークン取得成功（有効期間: {days}日）")
 
     print(f"\n{'=' * 60}")
-    print(f"✅ 長期トークン取得成功（有効期間: {days}日）")
+    if days > 0:
+        print(f"✅ 長期トークン（{days}日有効）")
+    else:
+        print("⚠️  短期トークン（約1時間で期限切れ）")
     print(f"\nGitHub Secretsに登録する値:")
     print(f"\n  THREADS_ACCESS_TOKEN = {long_token}")
     if user_id:

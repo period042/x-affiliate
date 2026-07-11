@@ -66,7 +66,7 @@ jobs:
         run: |
           git config user.name "GitHub Actions Bot"
           git config user.email "actions@github.com"
-          git add threads_promo_posted/ 2>/dev/null || true
+          git add threads_promo_posted/ threads_queue/ 2>/dev/null || true
           git diff --staged --quiet || git commit -m "chore: auto-threads-promo [skip ci]"
           for i in 1 2 3; do
             git pull --rebase origin main 2>&1 || git rebase --abort

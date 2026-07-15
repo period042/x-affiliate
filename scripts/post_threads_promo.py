@@ -71,7 +71,7 @@ def fetch_note_stats() -> dict:
     return stats
 
 
-def calc_score(stats_entry: dict) -> float:
+def calc_score(stats_entry: dict, posted_at: str = '') -> float:
     likes = stats_entry.get('likes', 0)
     views = stats_entry.get('views', 0)
     score = likes * 3 + views * 0.1
@@ -82,6 +82,18 @@ def calc_score(stats_entry: dict) -> float:
             age_days = (datetime.now(pub.tzinfo) - pub).days
             if age_days <= 30:
                 score *= 1.5
+        except Exception:
+            pass
+    # 新着ボーナス: note_posted の posted_at が 48 時間以内なら最優先
+    if posted_at:
+        try:
+            pt = datetime.fromisoformat(posted_at)
+            if pt.tzinfo is None:
+                pt = pt.replace(tzinfo=datetime.now().astimezone().tzinfo)
+            age_hours = (datetime.now(pt.tzinfo) - pt).total_seconds() / 3600
+            if age_hours <= 48:
+                score += 5000  # 人気記事スコアを確実に上回る固定ボーナス
+                print(f'  [NEW] 新着ボーナス付与 (公開 {age_hours:.1f}h前)')
         except Exception:
             pass
     return score
@@ -128,6 +140,7 @@ def get_candidate_articles(note_stats: dict, recently_promoted: set) -> list:
                 continue
             note_key = url.split('/n/')[-1] if '/n/' in url else ''
             stats = note_stats.get(note_key, {})
+            posted_at = d.get('posted_at', '')
             articles.append({
                 'file':    f.name,
                 'title':   d.get('title', ''),
@@ -136,7 +149,7 @@ def get_candidate_articles(note_stats: dict, recently_promoted: set) -> list:
                 'url':     url,
                 'likes':   stats.get('likes', 0),
                 'views':   stats.get('views', 0),
-                'score':   calc_score(stats),
+                'score':   calc_score(stats, posted_at),
             })
         except Exception:
             pass

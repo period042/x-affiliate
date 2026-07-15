@@ -8,6 +8,9 @@ on:
     - cron: '0 4 * * *'    # 13:00 JST
     - cron: '0 8 * * *'    # 17:00 JST
     - cron: '0 12 * * *'   # 21:00 JST
+  workflow_run:
+    workflows: ["Note Auto Post"]
+    types: [completed]
   workflow_dispatch:
 concurrency:
   group: threads-promo-post
@@ -16,6 +19,10 @@ concurrency:
 jobs:
   post:
     runs-on: ubuntu-latest
+    # workflow_run 経由の場合、note投稿が成功したときだけ実行
+    if: >
+      github.event_name != 'workflow_run' ||
+      github.event.workflow_run.conclusion == 'success'
     permissions:
       contents: write
       issues: write

@@ -164,17 +164,37 @@ def post_article(article_path):
     with open(article_path, encoding='utf-8-sig') as f:
         article = json.load(f)
 
-    title   = article['title']
-    content = article['content']
-    genre   = article.get('genre', 'default')
+    title         = article['title']
+    content       = article['content']
+    genre         = article.get('genre', 'default')
+    scheduled_for = article.get('scheduled_for', '')
     print(f"\n=== 投稿開始: {title[:40]}... ===")
     SCREENSHOT_DIR.mkdir(exist_ok=True)
 
     # ── ヘッダ画像生成 ────────────────────────────────
     print("[0] ヘッダ画像生成...")
     image_path = str(SCREENSHOT_DIR / 'header.png')
+    used_photo_id = None
     try:
-        gen_image(title, genre, image_path)
+        today_str = datetime.now().strftime('%Y-%m-%d')
+        tracker_path = DATA_DIR / 'image_tracker.json'
+        try:
+            tracker = json.loads(tracker_path.read_text(encoding='utf-8')) if tracker_path.exists() else {}
+        except Exception:
+            tracker = {}
+        # 今日・同ジャンルで使用済みの写真IDを除外リストに
+        today_used = tracker.get(today_str, {}).get(genre, [])
+        used_photo_id = gen_image(title, genre, image_path, seed_extra=scheduled_for, exclude_photos=today_used)
+        # トラッカー更新
+        if used_photo_id:
+            tracker.setdefault(today_str, {}).setdefault(genre, [])
+            if used_photo_id not in tracker[today_str][genre]:
+                tracker[today_str][genre].append(used_photo_id)
+            # 14日より古いエントリを削除
+            from datetime import timedelta
+            cutoff = (datetime.now() - timedelta(days=14)).strftime('%Y-%m-%d')
+            tracker = {d: v for d, v in tracker.items() if d >= cutoff}
+            tracker_path.write_text(json.dumps(tracker, ensure_ascii=False, indent=2), encoding='utf-8')
     except Exception as e:
         print(f"  生成失敗: {e}")
         image_path = None

@@ -377,24 +377,28 @@ UNSPLASH_PHOTO_POOLS = {
     ],
 }
 
-def _unsplash_generate(genre: str, seed: int, output_path: str) -> bool:
-    """Unsplash直接URL - APIキー不要、内容に沿った事前選定写真"""
+def _unsplash_generate(genre: str, seed: int, output_path: str, exclude_photos: list = None) -> str:
+    """Unsplash直接URL - APIキー不要、内容に沿った事前選定写真。成功時はphoto IDを返す、失敗時はNone"""
     key   = _genre_key(genre)
     pool  = UNSPLASH_PHOTO_POOLS.get(key, UNSPLASH_PHOTO_POOLS["default"])
-    photo = pool[seed % len(pool)]
-    url   = f"https://images.unsplash.com/{photo}?w=1280&h=720&fit=crop&auto=format&q=80"
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=20) as resp:
-            data = resp.read()
-        if len(data) < 10000:
-            return False
-        _resize_crop(data, output_path)
-        print(f"  Unsplash成功: {photo[:30]}")
-        return True
-    except Exception as e:
-        print(f"  Unsplash失敗: {type(e).__name__}: {e}")
-        return False
+    exclude_set = set(exclude_photos or [])
+    # seed based start index, then try each photo in pool avoiding excluded ones
+    candidates = [pool[(seed + i) % len(pool)] for i in range(len(pool))]
+    ordered = [p for p in candidates if p not in exclude_set] + [p for p in candidates if p in exclude_set]
+    for photo in ordered:
+        url = f"https://images.unsplash.com/{photo}?w=1280&h=720&fit=crop&auto=format&q=80"
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                data = resp.read()
+            if len(data) < 10000:
+                continue
+            _resize_crop(data, output_path)
+            print(f"  Unsplash成功: {photo[:30]}")
+            return photo
+        except Exception as e:
+            print(f"  Unsplash失敗: {type(e).__name__}: {e}")
+    return None
 
 
 # ────────────────────────────────────────────────
@@ -504,8 +508,9 @@ def _gradient_fallback(genre: str, output_path: str):
 # ────────────────────────────────────────────────
 # メインエントリ
 # ────────────────────────────────────────────────
-def generate(title: str, genre: str, output_path: str):
-    seed = _seed_from_title(title)
+def generate(title: str, genre: str, output_path: str, seed_extra: str = "", exclude_photos: list = None) -> str:
+    """画像を生成してoutput_pathに保存。使用したUnsplash photo IDを返す（Unsplash以外はNone）"""
+    seed = _seed_from_title(title + seed_extra)
     print(f"  画像生成: genre={genre} seed={seed}")
 
     # 1st: Pexels
@@ -513,30 +518,32 @@ def generate(title: str, genre: str, output_path: str):
         print("  [Pexels] 取得中...")
         if _pexels_generate(genre, seed, output_path):
             print(f"  画像生成完了(Pexels): {output_path}")
-            return
+            return None
 
     # 2nd: Unsplash直接URL（内容に沿った厳選写真）
     print("  [Unsplash] 取得中...")
-    if _unsplash_generate(genre, seed, output_path):
+    photo_id = _unsplash_generate(genre, seed, output_path, exclude_photos=exclude_photos)
+    if photo_id:
         print(f"  画像生成完了(Unsplash): {output_path}")
-        return
+        return photo_id
 
     # 3rd: LoremFlickr（キーワード検索）
     print("  [LoremFlickr] 取得中...")
     if _loremflickr_generate(genre, seed, output_path):
         print(f"  画像生成完了(LoremFlickr): {output_path}")
-        return
+        return None
 
     # 3rd: Pollinations
     print("  [Pollinations] 生成中...")
     if _pollinations_generate(genre, seed, output_path):
         print(f"  画像生成完了(Pollinations): {output_path}")
-        return
+        return None
 
     # 4th: Gradient
     print("  [Fallback] グラデーション")
     _gradient_fallback(genre, output_path)
     print(f"  画像生成完了(fallback): {output_path}")
+    return None
 
 
 if __name__ == "__main__":

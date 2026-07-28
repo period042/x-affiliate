@@ -94,23 +94,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_PAT_SECRETS }}
           TOKEN: ${{ env.TOKEN }}
-          APP_ID: "1005657055603772"
         run: |
           echo "$TOKEN" | gh secret set THREADS_ACCESS_TOKEN --repo period042/x-affiliate
           echo "THREADS_ACCESS_TOKEN 更新完了 (x-affiliate)"
-
-          # gourmet-sns にも同じトークンを登録
-          echo "$TOKEN" | gh secret set THREADS_ACCESS_TOKEN --repo period042/gourmet-sns
-          echo "THREADS_ACCESS_TOKEN 更新完了 (gourmet-sns)"
-
-          # Threads ユーザーIDを取得して gourmet-sns に登録
-          USER_ID=$(curl -s "https://graph.threads.net/v1.0/me?fields=id&access_token=$TOKEN" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))")
-          if [ -n "$USER_ID" ]; then
-            echo "$USER_ID" | gh secret set THREADS_USER_ID --repo period042/gourmet-sns
-            echo "THREADS_USER_ID ($USER_ID) を gourmet-sns に登録"
-          else
-            echo "⚠️ THREADS_USER_ID 取得失敗"
-          fi
 
       - name: Close token-expired issue
         env:

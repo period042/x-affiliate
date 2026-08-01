@@ -12,7 +12,7 @@ Threadsにnote記事の宣伝投稿をする（高エンゲージメント記事
   - フォーマット: スレッド投稿 / 質問投稿 / Before/After / 引用
   - スレッド投稿は Threads reply_to_id で連投
 """
-import os, json, time, requests, sys, subprocess
+import os, json, time, requests, sys, subprocess, re
 from pathlib import Path
 from datetime import datetime, timedelta
 
@@ -33,6 +33,58 @@ THREADS_PROMO_POSTED_DIR = DATA_DIR / 'threads_promo_posted'
 THREADS_QUEUE_DIR        = DATA_DIR / 'threads_queue'
 
 PROMO_COOLDOWN_DAYS = 30
+
+
+def strip_url_from_text(text: str) -> str:
+    """本文からnote.com URLと誘導フレーズを除去"""
+    lines = text.split('\n')
+    filtered = []
+    for line in lines:
+        s = line.strip()
+        if s.startswith('http') and 'note.com' in s:
+            continue
+        if s in ('詳しくはこちら→', '詳しくはこちら', '→ 記事はこちら', '→ こちら'):
+            continue
+        if re.match(r'^→\s', s) and any(w in s for w in ('こちら', 'リンク', '記事')):
+            continue
+        filtered.append(line)
+    result = '\n'.join(filtered)
+    result = re.sub(r'\n{3,}', '\n\n', result).strip()
+    return result
+
+
+def post_reply_comment(parent_id: str, url: str) -> str | None:
+    """親投稿のリプライとしてURLだけを投稿"""
+    try:
+        r = requests.post(
+            f"https://graph.threads.net/v1.0/{THREADS_USER_ID}/threads",
+            params={
+                "media_type": "TEXT",
+                "text": url,
+                "reply_to_id": parent_id,
+                "access_token": THREADS_ACCESS_TOKEN,
+            },
+            timeout=30,
+        )
+        if not r.ok:
+            print(f"[WARN] URLリプライ作成失敗: {r.status_code}")
+            return None
+        container_id = r.json()['id']
+        time.sleep(3)
+        r2 = requests.post(
+            f"https://graph.threads.net/v1.0/{THREADS_USER_ID}/threads_publish",
+            params={"creation_id": container_id, "access_token": THREADS_ACCESS_TOKEN},
+            timeout=30,
+        )
+        if not r2.ok:
+            print(f"[WARN] URLリプライ公開失敗: {r2.status_code}")
+            return None
+        reply_id = r2.json()['id']
+        print(f"[OK] URLリプライ投稿: {reply_id}")
+        return reply_id
+    except Exception as e:
+        print(f"[WARN] URLリプライ例外: {e}")
+        return None
 
 
 def write_summary(text: str):
@@ -192,7 +244,7 @@ GENERATION_PROMPT = """あなたは外資系IT企業に勤める30代の会社�
 ## 制約
 - 日本語
 - 全角200〜350文字（スレッドは各投稿200〜350文字・最大3投稿）
-- 末尾に必ず記事URLを入れる（URLは {url} を使う）
+- 記事URLは本文に含めない（URLは投稿後にコメントで別途掲載します）
 - ハッシュタグは使わない
 - 「プロフのリンク」「プロフはこちら」「続きはこちら」「記事はこちら」「詳しくはこちら」は絶対に使わない
 - 箇条書き・①②③は使わない。自然な文章で書く
@@ -237,7 +289,7 @@ def generate_post(article: dict) -> str:
          if l.strip() and not l.strip().startswith(('#', '→', 'http', '※', '【'))),
         ''
     )
-    return f"{hook}\n\n{title}\n\n→ 記事はこちら\n{url}" if hook else f"{title}\n\n→ 記事はこちら\n{url}"
+    return f"{hook}\n\n{title}" if hook else title
 
 
 def post_single(text: str, retry: int = 3) -> str:
@@ -424,7 +476,10 @@ def main():
         content   = queued['content']
         note_url  = queued.get('note_url', '')
         title     = queued.get('article_title', '')
-        print(f"[QUEUE] キュー投稿: {title}")
+        post_type = queued.get('type', 'buzz')
+        print(f"[QUEUE] キュー投稿({post_type}): {title}")
+        # URLを本文から除去
+        content = strip_url_from_text(content)
         posts     = [p.strip() for p in content.split('---') if p.strip()]
         is_thread = len(posts) > 1
         try:
@@ -436,6 +491,10 @@ def main():
                 threads_url = f"https://www.threads.net/t/{post_id}"
                 post_ids   = [post_id]
             print(f"[OK] Threads投稿成功: {threads_url}")
+            # URLをリプライで投稿（questionタイプ以外）
+            if note_url and post_type != 'question':
+                time.sleep(5)
+                post_reply_comment(post_ids[0], note_url)
             write_summary(
                 f"## Threads宣伝投稿\n✅ キュー投稿成功: {threads_url}\n"
                 f"- 記事: {title}\n- note URL: {note_url}"
@@ -463,6 +522,7 @@ def main():
     print(f"URL: {article['url']}")
 
     generated = generate_post(article)
+    generated = strip_url_from_text(generated)
 
     # 「---」区切りでスレッド投稿かを判定
     posts = [p.strip() for p in generated.split('---') if p.strip()]
@@ -482,6 +542,11 @@ def main():
             post_ids = [post_id]
 
         print(f"[OK] Threads投稿成功: {threads_url}")
+
+        # URLをリプライで投稿
+        if article.get('url'):
+            time.sleep(5)
+            post_reply_comment(post_ids[0], article['url'])
 
         record = {
             'note_url':         article['url'],

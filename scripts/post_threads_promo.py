@@ -12,7 +12,7 @@ Threadsにnote記事の宣伝投稿をする（高エンゲージメント記事
   - フォーマット: スレッド投稿 / 質問投稿 / Before/After / 引用
   - スレッド投稿は Threads reply_to_id で連投
 """
-import os, json, time, requests, sys, subprocess, re
+import os, json, time, requests, sys, subprocess, re, re
 from pathlib import Path
 from datetime import datetime, timedelta
 
@@ -223,7 +223,6 @@ GENERATION_PROMPT = """あなたは外資系IT企業に勤める30代の会社�
 - 「宣伝」ではなく「同僚や友人に記事を教えている感覚」で書く
 - 記事タイトルをそのまま使わず、記事から得た気づき・驚き・反省を自分の言葉で書く
 - 冒頭1〜2文で記事の核心をついた具体的なひとことを置く
-- URLは自然な流れで最後に置く（誘導フレーズは不要）
 
 ## 投稿パターン（記事内容に合ったものを1つ選ぶ）
 - **スレッド（---で区切り、最大3投稿）**: 気づきに段階があり次の投稿を読ませられる場合

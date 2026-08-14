@@ -294,18 +294,47 @@ def post_article(article_path):
                 try:
                     ss(page, '03_editor')
                     # アイキャッチアイコン（タイトル上部の円形ボタン）をクリック
-                    page.mouse.click(343, 125)
-                    page.wait_for_timeout(1500)
+                    # CSSセレクタ優先 → 座標フォールバック（x=519: コンテンツ領域中央）
+                    eyecatch_opened = False
+                    for eyecatch_sel in [
+                        '[class*="eyecatch"]',
+                        '[class*="Eyecatch"]',
+                        '[class*="coverImage"]',
+                        '[class*="CoverImage"]',
+                        'button[aria-label*="画像"]',
+                        'button[aria-label*="アイキャッチ"]',
+                    ]:
+                        try:
+                            page.click(eyecatch_sel, timeout=2000)
+                            page.wait_for_timeout(1500)
+                            eyecatch_opened = True
+                            print(f"  アイキャッチクリック: {eyecatch_sel}")
+                            break
+                        except Exception:
+                            continue
+                    if not eyecatch_opened:
+                        # 座標フォールバック: x=519(コンテンツ領域), y=125
+                        page.mouse.click(519, 125)
+                        page.wait_for_timeout(1500)
+                        print("  座標クリック (519, 125)")
                     ss(page, '03b_popup')
 
-                    # 「画像をアップロード」ボタンをクリック
-                    try:
-                        page.click('button:has-text("画像をアップロード")', timeout=4000)
-                        page.wait_for_timeout(1000)
-                        print("  「画像をアップロード」クリック")
-                    except Exception:
-                        print("  「画像をアップロード」ボタンが見つかりません。スキップ")
-                        raise
+                    # 「画像をアップロード」ボタンをクリック（テキスト変動に対応）
+                    upload_clicked = False
+                    for upload_text in [
+                        "画像をアップロード", "写真をアップロード", "アップロード",
+                        "画像を選ぶ", "ファイルを選択", "写真を選択"
+                    ]:
+                        try:
+                            page.click(f'button:has-text("{upload_text}")', timeout=3000)
+                            page.wait_for_timeout(1000)
+                            print(f"  アップロードボタン: {upload_text}")
+                            upload_clicked = True
+                            break
+                        except Exception:
+                            continue
+                    if not upload_clicked:
+                        raise Exception("アップロードボタンが見つかりません")
 
                     # input[type=file] が出現したらセット
                     file_inputs = page.locator('input[type="file"]').all()

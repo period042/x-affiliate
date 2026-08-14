@@ -2,11 +2,9 @@ name: Threads Promo Post
 
 on:
   schedule:
-    # buzz(07:00/21:00) + note_promo(10:00/13:00/17:00) = 5件/日 JST
-    - cron: '0 22 * * *'   #  7:00 JST (22:00 UTC 前日)
+    # 3件/日: 10:00 / 16:00 / 21:00 JST
     - cron: '0 1 * * *'    # 10:00 JST
-    - cron: '0 4 * * *'    # 13:00 JST
-    - cron: '0 8 * * *'    # 17:00 JST
+    - cron: '0 7 * * *'    # 16:00 JST
     - cron: '0 12 * * *'   # 21:00 JST
   workflow_dispatch:
 concurrency:

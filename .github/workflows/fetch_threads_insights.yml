@@ -1,4 +1,4 @@
-name: Fetch Threads Insights (one-shot)
+name: Fetch Threads Insights
 
 on:
   workflow_dispatch:
@@ -6,85 +6,33 @@ on:
 jobs:
   fetch:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - name: Fetch posts and insights
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: period042/x-affiliate-data
+          token: ${{ secrets.DATA_REPO_PAT }}
+          path: data
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install requests
+
+      - name: Fetch insights
         env:
           THREADS_ACCESS_TOKEN: ${{ secrets.THREADS_ACCESS_TOKEN }}
-          THREADS_USER_ID: ${{ secrets.THREADS_USER_ID }}
+          DATA_DIR: ${{ github.workspace }}/data
+        run: python scripts/fetch_threads_insights.py
+
+      - name: Save results
+        working-directory: data
         run: |
-          echo "## Threads投稿インサイト" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-
-          # 最新50件の投稿を取得
-          POSTS=$(curl -s "https://graph.threads.net/v1.0/${THREADS_USER_ID}/threads?fields=id,text,timestamp,media_type&limit=50&access_token=${THREADS_ACCESS_TOKEN}")
-          echo "投稿取得: $POSTS" | head -c 200
-
-          # インサイト付きで再取得（Python で処理）
-          python3 << 'PYEOF'
-          import os, json, requests, time
-
-          TOKEN = os.environ['THREADS_ACCESS_TOKEN']
-          USER_ID = os.environ['THREADS_USER_ID']
-
-          # 投稿一覧取得（最新50件）
-          r = requests.get(
-              f"https://graph.threads.net/v1.0/{USER_ID}/threads",
-              params={
-                  "fields": "id,text,timestamp,media_type",
-                  "limit": 50,
-                  "access_token": TOKEN,
-              },
-              timeout=30,
-          )
-          posts = r.json().get("data", [])
-          print(f"投稿数: {len(posts)}")
-
-          results = []
-          for post in posts:
-              pid = post["id"]
-              # インサイト取得
-              ri = requests.get(
-                  f"https://graph.threads.net/v1.0/{pid}/insights",
-                  params={
-                      "metric": "views,likes,replies,reposts,quotes,shares",
-                      "access_token": TOKEN,
-                  },
-                  timeout=15,
-              )
-              ins = {}
-              for m in ri.json().get("data", []):
-                  ins[m["name"]] = m.get("values", [{}])[0].get("value", 0) if m.get("values") else m.get("total_value", {}).get("value", 0)
-
-              text = post.get("text", "")[:80]
-              ts = post.get("timestamp", "")[:10]
-              engagement = ins.get("likes", 0) + ins.get("replies", 0) + ins.get("reposts", 0) + ins.get("quotes", 0)
-              results.append({
-                  "date": ts,
-                  "text": text,
-                  "views": ins.get("views", 0),
-                  "likes": ins.get("likes", 0),
-                  "replies": ins.get("replies", 0),
-                  "reposts": ins.get("reposts", 0),
-                  "quotes": ins.get("quotes", 0),
-                  "engagement": engagement,
-              })
-              time.sleep(0.3)
-
-          # エンゲージメント順ソート
-          results.sort(key=lambda x: x["engagement"], reverse=True)
-
-          # サマリー出力
-          summary_path = os.environ.get("GITHUB_STEP_SUMMARY", "/dev/stdout")
-          with open(summary_path, "a") as f:
-              f.write(f"取得投稿数: {len(results)}件\n\n")
-              f.write("### TOP 20（エンゲージメント順）\n\n")
-              f.write("| 日付 | views | likes | replies | reposts | quotes | 本文(先頭80字) |\n")
-              f.write("|------|------:|------:|--------:|--------:|-------:|----------------|\n")
-              for r in results[:20]:
-                  text_esc = r["text"].replace("|", "｜").replace("\n", " ")
-                  f.write(f"| {r['date']} | {r['views']} | {r['likes']} | {r['replies']} | {r['reposts']} | {r['quotes']} | {text_esc} |\n")
-
-              f.write("\n### 全投稿JSON\n\n```json\n")
-              f.write(json.dumps(results, ensure_ascii=False, indent=2))
-              f.write("\n```\n")
-          PYEOF
+          git config user.name "GitHub Actions Bot"
+          git config user.email "actions@github.com"
+          git add threads_insights.json
+          git diff --staged --quiet || git commit -m "chore: add threads insights [skip ci]"
+          git pull --rebase origin main
+          git push

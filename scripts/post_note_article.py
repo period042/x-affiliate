@@ -71,15 +71,50 @@ def get_next_article():
 
 
 def insert_content_with_ogp(page, content):
-    """本文をOGPカード付きで挿入する（クリップボード不要・直接タイプ方式）"""
+    """本文をOGPカード付き・[text](url)リンク対応で挿入する"""
+    import re as _link_re
+    LINK_PATTERN = _link_re.compile(r'\[([^\]]+)\]\((https?://[^)]+)\)')
+
     lines = content.split('\n')
     for line in lines:
         stripped = line.strip()
         if stripped.startswith('https://') or stripped.startswith('http://'):
-            # URLは直接キーボード入力してEnterでOGP変換を待つ
+            # 裸のURL → OGPカード変換
             page.keyboard.type(stripped, delay=3)
             page.keyboard.press('Enter')
-            page.wait_for_timeout(2500)  # OGP変換待ち
+            page.wait_for_timeout(2500)
+        elif LINK_PATTERN.search(line):
+            # [text](url) を Ctrl+K でクリッカブルリンクとして挿入
+            parts = LINK_PATTERN.split(line)
+            # parts: [before, link_text, url, between, link_text2, url2, after, ...]
+            i = 0
+            while i < len(parts):
+                r = i % 3
+                chunk = parts[i]
+                if r == 0:
+                    if chunk:
+                        page.keyboard.type(chunk, delay=8)
+                elif r == 1:
+                    link_text = chunk
+                    link_url = parts[i + 1]
+                    page.keyboard.type(link_text, delay=8)
+                    # 入力したテキストを末尾から選択
+                    for _ in range(len(link_text)):
+                        page.keyboard.press('Shift+ArrowLeft')
+                    page.wait_for_timeout(300)
+                    # Ctrl+K でリンクダイアログを開く
+                    page.keyboard.press('Control+k')
+                    page.wait_for_timeout(1000)
+                    # URLを入力してEnterで確定
+                    page.keyboard.type(link_url, delay=5)
+                    page.keyboard.press('Enter')
+                    page.wait_for_timeout(500)
+                    page.keyboard.press('ArrowRight')  # カーソルをリンク末尾へ
+                    page.wait_for_timeout(100)
+                    i += 1  # url部分(r==2)をスキップ
+                i += 1
+            page.keyboard.press('Enter')
+            page.wait_for_timeout(30)
         else:
             if line:
                 page.keyboard.type(line, delay=8)

@@ -315,72 +315,48 @@ def post_article(article_path):
                 raise RuntimeError("記事ページでログイン要求")
 
             # ── エディタ上部でアイキャッチを設定 ──────────────────────
-            # 確定フロー: アイキャッチアイコン → 「画像をアップロード」→ input[file] → 「保存」
-            # API: POST /api/v1/image_upload/note_eyecatch
+            # 確定フロー: button[data-id="ButtonIcon"] → 「画像をアップロード」→ expect_file_chooser → CropModal保存
             if image_path and os.path.exists(image_path):
                 print("[3] エディタアイキャッチ設定...")
                 try:
                     ss(page, '03_editor')
-                    # アイキャッチアイコン（タイトル上部の円形ボタン）をクリック
-                    # CSSセレクタ優先 → 座標フォールバック（x=519: コンテンツ領域中央）
-                    eyecatch_opened = False
-                    for eyecatch_sel in [
-                        '[class*="eyecatch"]',
-                        '[class*="Eyecatch"]',
-                        '[class*="coverImage"]',
-                        '[class*="CoverImage"]',
-                        'button[aria-label*="画像"]',
-                        'button[aria-label*="アイキャッチ"]',
-                    ]:
-                        try:
-                            page.click(eyecatch_sel, timeout=2000)
-                            page.wait_for_timeout(1500)
-                            eyecatch_opened = True
-                            print(f"  アイキャッチクリック: {eyecatch_sel}")
-                            break
-                        except Exception:
-                            continue
-                    if not eyecatch_opened:
-                        # 座標フォールバック: x=519(コンテンツ領域), y=125
-                        page.mouse.click(519, 125)
-                        page.wait_for_timeout(1500)
-                        print("  座標クリック (519, 125)")
+                    # main 領域内の ButtonIcon を Y座標最小（=最上部）で取得
+                    btn_pos = page.evaluate("""
+                        () => {
+                            const main = document.querySelector('main');
+                            const mainX = main ? main.getBoundingClientRect().left : 300;
+                            const btns = [...document.querySelectorAll('button[data-id="ButtonIcon"]')]
+                                .filter(b => {
+                                    const r = b.getBoundingClientRect();
+                                    return r.left >= mainX - 60 && r.width > 0 && r.height > 0;
+                                })
+                                .sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
+                            if (!btns[0]) return null;
+                            const r = btns[0].getBoundingClientRect();
+                            return {cx: r.left + r.width/2, cy: r.top + r.height/2};
+                        }
+                    """)
+                    if not btn_pos:
+                        raise Exception("ButtonIcon が見つかりません")
+                    print(f"  ButtonIcon cx={btn_pos['cx']:.0f} cy={btn_pos['cy']:.0f}")
+                    page.mouse.click(btn_pos['cx'], btn_pos['cy'])
+                    page.wait_for_timeout(1500)
                     ss(page, '03b_popup')
 
-                    # 「画像をアップロード」ボタンをクリック（テキスト変動に対応）
-                    upload_clicked = False
-                    for upload_text in [
-                        "画像をアップロード", "写真をアップロード", "アップロード",
-                        "画像を選ぶ", "ファイルを選択", "写真を選択"
-                    ]:
-                        try:
-                            page.click(f'button:has-text("{upload_text}")', timeout=3000)
-                            page.wait_for_timeout(1000)
-                            print(f"  アップロードボタン: {upload_text}")
-                            upload_clicked = True
-                            break
-                        except Exception:
-                            continue
-                    if not upload_clicked:
-                        raise Exception("アップロードボタンが見つかりません")
-
-                    # input[type=file] が出現したらセット
-                    file_inputs = page.locator('input[type="file"]').all()
-                    print(f"  input[type=file]: {len(file_inputs)}個")
-                    if not file_inputs:
-                        raise Exception("file input が出現しなかった")
-
-                    file_inputs[0].set_input_files(image_path)
-                    page.wait_for_timeout(3000)
+                    # expect_file_chooser でファイル選択を捕捉してからアップロードボタンをクリック
+                    with page.expect_file_chooser(timeout=8000) as fc_ctx:
+                        page.click('text=画像をアップロード', timeout=5000)
+                    fc_ctx.value.set_files(image_path)
+                    print("  ファイル設定完了")
+                    page.wait_for_timeout(5000)
                     ss(page, '03c_crop')
 
-                    # クロップモーダルの「保存」ボタン
-                    # ReactModal__Overlay がポインターイベントを遮断するため JS クリックで回避
+                    # CropModal の「保存」を JS クリック（overlay による遮断を回避）
                     saved = page.evaluate("""
                         () => {
-                            const btns = Array.from(document.querySelectorAll('button'));
-                            // モーダル内の最後の「保存」が正解（外側の「保存」は overlay に遮断される）
-                            const b = [...btns].reverse().find(b => (b.innerText||'').trim() === '保存');
+                            const ov = document.querySelector('.CropModal__overlay');
+                            if (!ov) return false;
+                            const b = [...ov.querySelectorAll('button')].find(b => (b.innerText||'').trim() === '保存');
                             if (b) { b.click(); return true; }
                             return false;
                         }
@@ -391,7 +367,6 @@ def post_article(article_path):
                     print("  アイキャッチ設定完了")
                 except Exception as e:
                     print(f"  エディタアイキャッチスキップ: {e}")
-                    # クロップモーダルが残っていたら Escape で閉じる
                     try:
                         page.keyboard.press('Escape')
                         page.wait_for_timeout(800)

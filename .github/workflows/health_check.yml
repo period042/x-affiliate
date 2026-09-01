@@ -60,31 +60,49 @@ jobs:
             const utcHour = new Date().getUTCHours();
             const isQuietTime = utcHour >= 16 && utcHour <= 20;
 
+            const triggerWorkflow = async (workflowId, label) => {
+              try {
+                const wf = await github.rest.actions.getWorkflow({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  workflow_id: workflowId
+                });
+                if (wf.data.state !== 'active') {
+                  console.log(`⏸️ ${label}ワークフローは停止中のためスキップ`);
+                  return false;
+                }
+                await github.rest.actions.createWorkflowDispatch({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  workflow_id: workflowId,
+                  ref: 'main'
+                });
+                return true;
+              } catch (e) {
+                console.log(`⚠️ ${label}トリガー失敗（無視）: ${e.message}`);
+                return false;
+              }
+            };
+
             if (!isQuietTime) {
               // X: 3時間以上投稿なし → 即トリガー
               if (xAge > THREE_HOURS) {
                 console.log(`🔴 X投稿が${xHours}時間止まっています → 緊急トリガー`);
-                await github.rest.actions.createWorkflowDispatch({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  workflow_id: 'post.yml',
-                  ref: 'main'
-                });
-                core.summary.addRaw(`## ⚠️ Health Check: X投稿を強制トリガー\n- 最終投稿から${xHours}時間経過`);
-                await core.summary.write();
+                const ok = await triggerWorkflow('post.yml', 'X');
+                if (ok) {
+                  core.summary.addRaw(`## ⚠️ Health Check: X投稿を強制トリガー\n- 最終投稿から${xHours}時間経過`);
+                  await core.summary.write();
+                }
               }
 
               // Note: 6時間以上投稿なし → 即トリガー
               if (noteAge > SIX_HOURS) {
                 console.log(`🔴 Note投稿が${noteHours}時間止まっています → 緊急トリガー`);
-                await github.rest.actions.createWorkflowDispatch({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  workflow_id: 'note_post.yml',
-                  ref: 'main'
-                });
-                core.summary.addRaw(`## ⚠️ Health Check: Note投稿を強制トリガー\n- 最終投稿から${noteHours}時間経過`);
-                await core.summary.write();
+                const ok = await triggerWorkflow('note_post.yml', 'Note');
+                if (ok) {
+                  core.summary.addRaw(`## ⚠️ Health Check: Note投稿を強制トリガー\n- 最終投稿から${noteHours}時間経過`);
+                  await core.summary.write();
+                }
               }
             } else {
               console.log(`深夜帯(UTC ${utcHour}h)のためスキップ`);

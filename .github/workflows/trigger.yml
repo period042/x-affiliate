@@ -33,13 +33,16 @@ jobs:
               console.log('X skipped UTC ' + hour);
               return;
             }
-            await github.rest.actions.createWorkflowDispatch({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              workflow_id: 'post.yml',
-              ref: 'main'
-            });
-            console.log('X triggered UTC ' + hour);
+            try {
+              const wf = await github.rest.actions.getWorkflow({
+                owner: context.repo.owner, repo: context.repo.repo, workflow_id: 'post.yml'
+              });
+              if (wf.data.state !== 'active') { console.log('X workflow disabled, skipped'); return; }
+              await github.rest.actions.createWorkflowDispatch({
+                owner: context.repo.owner, repo: context.repo.repo, workflow_id: 'post.yml', ref: 'main'
+              });
+              console.log('X triggered UTC ' + hour);
+            } catch (e) { console.log('X trigger skipped: ' + e.message); }
 
   trigger-note:
     runs-on: ubuntu-latest
@@ -54,13 +57,16 @@ jobs:
               console.log('Note skipped UTC ' + hour);
               return;
             }
-            await github.rest.actions.createWorkflowDispatch({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              workflow_id: 'note_post.yml',
-              ref: 'main'
-            });
-            console.log('Note triggered UTC ' + hour);
+            try {
+              const wf = await github.rest.actions.getWorkflow({
+                owner: context.repo.owner, repo: context.repo.repo, workflow_id: 'note_post.yml'
+              });
+              if (wf.data.state !== 'active') { console.log('Note workflow disabled, skipped'); return; }
+              await github.rest.actions.createWorkflowDispatch({
+                owner: context.repo.owner, repo: context.repo.repo, workflow_id: 'note_post.yml', ref: 'main'
+              });
+              console.log('Note triggered UTC ' + hour);
+            } catch (e) { console.log('Note trigger skipped: ' + e.message); }
 
   trigger-thread:
     runs-on: ubuntu-latest
@@ -75,13 +81,16 @@ jobs:
               console.log('Thread skipped UTC ' + hour);
               return;
             }
-            await github.rest.actions.createWorkflowDispatch({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              workflow_id: 'thread_post.yml',
-              ref: 'main'
-            });
-            console.log('Thread triggered UTC ' + hour);
+            try {
+              const wf = await github.rest.actions.getWorkflow({
+                owner: context.repo.owner, repo: context.repo.repo, workflow_id: 'thread_post.yml'
+              });
+              if (wf.data.state !== 'active') { console.log('Thread workflow disabled, skipped'); return; }
+              await github.rest.actions.createWorkflowDispatch({
+                owner: context.repo.owner, repo: context.repo.repo, workflow_id: 'thread_post.yml', ref: 'main'
+              });
+              console.log('Thread triggered UTC ' + hour);
+            } catch (e) { console.log('Thread trigger skipped: ' + e.message); }
 
   on-failure:
     runs-on: ubuntu-latest

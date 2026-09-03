@@ -217,5 +217,77 @@
     "url": "https://px.a8.net/svt/ejp?a8mat=4BAI1L+CQFTCQ+1SVU+686ZM",
     "cta": "無料体験レッスンはこちら（PR）",
     "note": "オンライン英会話サービス。社会人の英会話練習・ビジネス英語・スキマ時間学習の文脈で活用できる。フィリピン人講師との会話練習に特化。"
+  },
+  "win_school": {
+    "name": "Winスクール（IT・PCスキルスクール）",
+    "url": "https://px.a8.net/svt/ejp?a8mat=4BAI1M+3I7XSQ+529E+BX3J6",
+    "cta": "無料体験・資料請求はこちら（PR）",
+    "note": "IT・PCスキルを学べる資格スクール。MOS・AutoCAD・Illustratorなど実務スキル習得を目指す社会人向け。スキルアップ・転職・副業準備の文脈で活用できる。"
+  },
+  "creator_plus": {
+    "name": "動画クリエイターPLUS（案件獲得サポート付き動画クリエイタースクール）",
+    "url": "https://px.a8.net/svt/ejp?a8mat=4BAI1M+3MZEMY+5VOU+5YJRM",
+    "cta": "無料相談はこちら（PR）",
+    "note": "動画クリエイターとして案件獲得まで一貫サポートするスクール。副業・フリーランス転向を目指す人向け。動画編集・副業の文脈で活用できる。"
+  },
+  "nigate_juku": {
+    "name": "苦手克服塾（中学生専門オンライン個別指導塾）",
+    "url": "https://px.a8.net/svt/ejp?a8mat=4BAI1L+E7FE6Y+5RMQ+HV7V6",
+    "cta": "無料体験授業はこちら（PR）",
+    "note": "苦手科目を80点以上に引き上げることを目標とした中学生専門のオンライン個別指導塾。定期テスト対策・内申点向上の文脈で活用できる。"
+  },
+  "archers": {
+    "name": "Archers（アーチャーズ）婚活サービス",
+    "url": "https://px.a8.net/svt/ejp?a8mat=4BAI1M+11ICNU+5GRC+5YZ76",
+    "cta": "無料登録はこちら（PR）",
+    "note": "はじめての婚活向けマッチングサービス。婚活初心者・アプリからステップアップを検討している人向け。婚活比較の文脈で活用できる。"
+  },
+  "lepton_bridge": {
+    "name": "Lepton Bridge（オンライン子ども英語教室）",
+    "url": "https://px.a8.net/svt/ejp?a8mat=4BAI1L+E0A6XM+5TC4+BWVTE",
+    "cta": "無料体験レッスンはこちら（PR）",
+    "note": "教室と同じ学習をオンラインで受けられる子ども英語教室。通塾が難しい・自宅学習を希望する親向け。子どもの英語教育・オンライン習い事の文脈で活用できる。"
+  },
+  "furdi": {
+    "name": "FURDI（女性専用AIパーソナルトレーニングジム）",
+    "url": "https://px.a8.net/svt/ejp?a8mat=4BAI1L+DPKE1M+5FC8+5YJRM",
+    "cta": "無料体験はこちら（PR）",
+    "note": "AIが個別メニューを提案する女性専用のパーソナルトレーニングジム。ダイエット・体型改善・健康管理を目指す女性向け。フィットネス・ダイエットの文脈で活用できる。"
+  },
+  "lepton": {
+    "name": "Lepton（子ども英語教室・英検2級対応）",
+    "url": "https://px.a8.net/svt/ejp?a8mat=4BAI1M+WQVTM+5TC4+5YJRM",
+    "cta": "無料体験はこちら（PR）",
+    "note": "英検2級取得を目標に実践的な英語力を育てる子ども英語教室。英検対策・子どもの英語学習を考えている親向け。"
+  },
+  "neuro_dive": {
+    "name": "Neuro Dive（AI・データサイエンス特化の就労移行支援）",
+    "url": "https://px.a8.net/svt/ejp?a8mat=4BAI1M+3XP7IY+47GS+HVFKY",
+    "cta": "無料見学はこちら（PR）",
+    "note": "AIやデータサイエンスが学べるIT特化の就労移行支援事業所。障害者手帳を持つIT志望者向け。就労支援・ITスキル習得の文脈で活用できる。"
+  },
+  "creators_japan": {
+    "name": "クリエイターズジャパン（動画編集スクール）",
+    "url": "https://px.a8.net/svt/ejp?a8mat=4BAI1M+3L73TM+4LJQ+614CY",
+    "cta": "無料相談はこちら（PR）",
+    "note": "動画編集スクール。副業・フリーランスとして動画クリエイターを目指す人向け。動画編集・副業の文脈で活用できる。"
+  },
+  "video_editor_course": {
+    "name": "動画教材エディター養成コース",
+    "url": "https://px.a8.net/svt/ejp?a8mat=4BAI1M+3KLO7U+4V0U+ZQFQA",
+    "cta": "詳細はこちら（PR）",
+    "note": "動画教材の編集・制作に特化したエディター養成コース。教育系動画・eラーニングコンテンツ制作を目指す人向け。"
+  },
+  "litalico_wonder": {
+    "name": "LITALICOワンダー（子ども向けプログラミング・ロボット教室）",
+    "url": "https://px.a8.net/svt/ejp?a8mat=4BAI1M+13W32Y+45KQ+60OXE",
+    "cta": "無料体験はこちら（PR）",
+    "note": "子ども向けプログラミング・ロボット・デジタルクリエイティブ教室。STEAM教育・プログラミング習い事を検討している親向け。"
+  },
+  "tintol": {
+    "name": "ティントル（不登校専門オンライン個別指導）",
+    "url": "https://px.a8.net/svt/ejp?a8mat=4BAI1L+ETGFKQ+4GSM+BX3J6",
+    "cta": "無料相談はこちら（PR）",
+    "note": "不登校の子ども専門のオンライン個別指導サービス。学校に行けない子どもの学習継続・自己肯定感回復を支援。不登校・学習支援の文脈で活用できる。"
   }
 }

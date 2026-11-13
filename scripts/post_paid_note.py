@@ -12,7 +12,7 @@ note_queueの中から paid:true のファイルを対象に処理する。
 """
 import base64, json, sys, os, re
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from playwright.sync_api import sync_playwright
 from generate_note_image import generate as generate_header_image
 
@@ -24,6 +24,7 @@ QUEUE_DIR = DATA_DIR / 'note_queue'
 POSTED_DIR= DATA_DIR / 'note_posted'
 LOG_DIR   = Path('/tmp') if os.environ.get('GITHUB_ACTIONS') else BASE_DIR / 'logs'
 LOCAL_COOKIE_PATH = BASE_DIR / 'note_cookies.json'
+TOKYO = timezone(timedelta(hours=9))
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -35,14 +36,18 @@ def ss(page, name):
 
 
 def get_next_paid_article():
-    today = datetime.now().date()
+    now = datetime.now(TOKYO)
     for path in sorted(QUEUE_DIR.glob('*.json')):
         try:
             d = json.loads(path.read_text(encoding='utf-8-sig'))
             if not d.get('paid'):
                 continue
-            sched = datetime.fromisoformat(d['scheduled_for']).date()
-            if sched <= today:
+            sched = datetime.fromisoformat(d['scheduled_for'])
+            if sched.tzinfo is None:
+                sched = sched.replace(tzinfo=TOKYO)
+            else:
+                sched = sched.astimezone(TOKYO)
+            if sched <= now:
                 return path, d
         except Exception as e:
             print(f'[WARN] {path.name}: {e}')

@@ -3,6 +3,7 @@ name: Paid Note Queue
 on:
   schedule:
     - cron: '0 11 * * *' # 20:00 JST
+    - cron: '5 11 13 11 *' # 20:05 JST catch-up for November 13
     - cron: '30 7 13 11 *' # 16:30 JST on November 13
   workflow_dispatch:
 

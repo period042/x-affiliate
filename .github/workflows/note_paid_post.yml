@@ -1,0 +1,72 @@
+name: Paid Note Queue
+
+on:
+  schedule:
+    - cron: '0 11 * * *' # 20:00 JST
+  workflow_dispatch:
+
+concurrency:
+  group: note-auto-post
+  cancel-in-progress: false
+
+jobs:
+  post-paid:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Checkout data repo
+        uses: actions/checkout@v4
+        with:
+          repository: period042/x-affiliate-data
+          token: ${{ secrets.DATA_REPO_PAT }}
+          path: data
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q fonts-noto-cjk
+          pip install playwright pillow requests
+          python -m playwright install chromium
+          python -m playwright install-deps chromium
+
+      - name: Post up to two paid articles
+        env:
+          NOTE_COOKIES: ${{ secrets.NOTE_COOKIES }}
+          NOTE_EMAIL: ${{ secrets.NOTE_EMAIL }}
+          NOTE_PASSWORD: ${{ secrets.NOTE_PASSWORD }}
+          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+          GITHUB_ACTIONS: "true"
+          DATA_DIR: ${{ github.workspace }}/data
+          PYTHONPATH: ${{ github.workspace }}/scripts
+        run: |
+          python scripts/post_paid_note.py
+          python scripts/post_paid_note.py
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: paid-note-screenshots-${{ github.run_id }}
+          path: /tmp/paid_*.png
+          if-no-files-found: ignore
+
+      - name: Commit queue changes
+        if: always()
+        working-directory: data
+        run: |
+          git config user.name "GitHub Actions Bot"
+          git config user.email "actions@github.com"
+          git add note_queue/ note_posted/
+          git diff --staged --quiet || git commit -m "chore: auto-post paid Note articles [skip ci]"
+          git pull --rebase origin main 2>&1 || git rebase --abort
+          git push origin main

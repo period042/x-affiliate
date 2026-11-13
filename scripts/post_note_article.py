@@ -58,6 +58,8 @@ def get_next_article():
         try:
             # utf-8-sig: BOM付きUTF-8も正しく読む
             d = json.loads(path.read_text(encoding='utf-8-sig'))
+            if d.get('paid'):
+                continue
             sched = datetime.fromisoformat(d['scheduled_for']).date()
             if sched <= today:
                 char_count = len(d.get('content', ''))

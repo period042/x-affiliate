@@ -28,6 +28,7 @@ PEXELS_QUERIES = {
     "住宅":              ["modern house exterior architecture", "japanese home interior living room", "new build house wooden frame"],
     "工務店":            ["construction blueprint desk tools", "architectural model house wooden", "building site workers"],
     "婚活":              ["couple coffee date cafe window", "romantic evening restaurant candles", "flowers ring bouquet white"],
+    "不妊治療":          ["modern clinic waiting room window", "quiet medical consultation room notebook", "clinic waiting chairs natural light"],
     "キャリア":          ["modern office workspace", "professional desk career", "business office morning light"],
     "default":           ["minimal workspace desk laptop", "clean desk coffee notebook", "modern home office light",
                           "productivity workspace morning", "desk setup plant window light", "cozy office corner"],
@@ -49,6 +50,7 @@ LOREMFLICKR_KEYWORDS = {
     "住宅":              "house,architecture",
     "工務店":            "construction,building",
     "婚活":              "couple,flowers",
+    "不妊治療":          "clinic,waitingroom",
     "キャリア":          "office,professional",
     "default":           "desk,office",
 }
@@ -130,6 +132,11 @@ GENRE_VISUALS = {
     "婚活": (
         "elegant cafe table with two coffee cups and small flower vase, "
         "warm bokeh background lights, romantic soft light, no people, lifestyle photography"
+    ),
+    "不妊治療": (
+        "quiet modern clinic waiting room with empty chairs, a simple notebook on a side table, "
+        "soft natural window light and a small green plant, no people, no readable signage, "
+        "respectful editorial interior photography"
     ),
     "婚活・自分磨き": (
         "modern bathroom vanity with skincare products arranged neatly, "

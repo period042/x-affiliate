@@ -39,7 +39,7 @@ jobs:
           python -m playwright install chromium
           python -m playwright install-deps chromium
 
-      - name: Post up to two paid articles
+      - name: Post up to three paid articles
         env:
           NOTE_COOKIES: ${{ secrets.NOTE_COOKIES }}
           NOTE_EMAIL: ${{ secrets.NOTE_EMAIL }}
@@ -49,6 +49,7 @@ jobs:
           DATA_DIR: ${{ github.workspace }}/data
           PYTHONPATH: ${{ github.workspace }}/scripts
         run: |
+          python scripts/post_paid_note.py
           python scripts/post_paid_note.py
           python scripts/post_paid_note.py
 

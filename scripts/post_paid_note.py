@@ -220,7 +220,7 @@ def _click_plus_and_insert_paywall(page):
         print("  [WARN] 有料エリア用の空段落が見つかりません")
         return False
 
-    button_x = max(para_info['left'] - 15, 5)
+    button_x = max(para_info['left'] - 55, 5)
     button_y = para_info['centerY']
     page.mouse.move(button_x, button_y)
     page.wait_for_timeout(600)

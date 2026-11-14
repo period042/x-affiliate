@@ -54,6 +54,10 @@ jobs:
           python scripts/post_paid_note.py
           python scripts/post_paid_note.py
           python scripts/post_paid_note.py
+          if [ "${{ github.event.schedule }}" = "0 11 * * *" ] && [ "$(date -u +%F)" = "2026-11-14" ]; then
+            echo "One-time catch-up for the fourth article from November 13"
+            python scripts/post_paid_note.py
+          fi
 
       - name: Upload screenshots
         if: always()

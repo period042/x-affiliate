@@ -94,21 +94,85 @@ def insert_paid_line(page):
     print("  有料ライン挿入中...")
 
     # ツールバーの有料エリアボタンを探す
-    for sel in [
-        'button[aria-label*="有料"]',
-        'button[title*="有料"]',
-        '[class*="paywall"]',
-        '[class*="PaidArea"]',
-        '[class*="paidArea"]',
-        'button[data-id="paid"]',
-    ]:
-        try:
-            page.click(sel, timeout=3000)
-            print(f"  クリック: {sel}")
-            page.wait_for_timeout(500)
-            return True
-        except Exception:
-            continue
+    return _click_plus_and_insert_paywall(page)
+
+
+    def _legacy_plus_menu_helper(page):
+        """末尾の空段落にある「+」から有料エリアを挿入する"""
+        para_info = page.evaluate("""
+            () => {
+                const editor = document.querySelector('.ProseMirror');
+                if (!editor) return null;
+                const paragraphs = Array.from(editor.querySelectorAll('p'));
+                for (let index = paragraphs.length - 1; index >= 0; index--) {
+                    const paragraph = paragraphs[index];
+                    if ((paragraph.innerText || '').trim() === '') {
+                        paragraph.scrollIntoView({block: 'center', behavior: 'instant'});
+                        const rect = paragraph.getBoundingClientRect();
+                        return {left: rect.left, centerY: rect.top + rect.height / 2};
+                    }
+                }
+                return null;
+            }
+        """)
+        if not para_info:
+            print("  [WARN] 有料エリア用の空段落が見つかりません")
+            return False
+
+        button_x = max(para_info['left'] - 15, 5)
+        button_y = para_info['centerY']
+        page.mouse.move(button_x, button_y)
+        page.wait_for_timeout(600)
+
+        buttons = page.evaluate("""
+            () => Array.from(document.querySelectorAll('button, [role="button"]'))
+                .filter(element => {
+                    const rect = element.getBoundingClientRect();
+                    const style = window.getComputedStyle(element);
+                    return rect.width > 5 && rect.height > 5 && rect.left < 700
+                        && style.display !== 'none' && style.visibility !== 'hidden'
+                        && parseFloat(style.opacity || '1') > 0.3;
+                })
+                .map(element => {
+                    const rect = element.getBoundingClientRect();
+                    return {
+                        x: Math.round(rect.left + rect.width / 2),
+                        y: Math.round(rect.top + rect.height / 2),
+                        text: (element.innerText || '').slice(0, 20),
+                        aria: element.getAttribute('aria-label') || '',
+                    };
+                }).slice(0, 10)
+        """)
+        print(f"  +ボタン候補: {buttons}")
+
+        nearest = min(buttons or [], key=lambda button: abs(button['y'] - button_y), default=None)
+        if nearest and abs(nearest['y'] - button_y) < 80:
+            page.mouse.click(nearest['x'], nearest['y'])
+        else:
+            page.mouse.click(button_x, button_y)
+        page.wait_for_timeout(600)
+        ss(page, 'paid_plus_menu')
+
+        for keyword in ['有料', 'paid']:
+            for selector in [
+                f'[role="menuitem"]:has-text("{keyword}")',
+                f'[role="option"]:has-text("{keyword}")',
+                f'button:has-text("{keyword}")',
+                f'li:has-text("{keyword}")',
+            ]:
+                try:
+                    item = page.locator(selector).first
+                    if item.is_visible(timeout=500):
+                        item.click()
+                        page.wait_for_timeout(400)
+                        print(f"  有料エリア選択: {selector}")
+                        return True
+                except Exception:
+                    pass
+
+        page.keyboard.press('Escape')
+        print("  [WARN] +メニューで有料エリアが見つかりません")
+        return False
 
     # JS経由でツールバーボタンを探す
     clicked = page.evaluate("""
@@ -131,18 +195,84 @@ def insert_paid_line(page):
         page.wait_for_timeout(500)
         return True
 
-    # ツールバーのボタン一覧を出力してデバッグ
-    btns = page.evaluate("""
+    return _click_plus_and_insert_paywall(page)
+
+
+def _click_plus_and_insert_paywall(page):
+    """末尾の空段落にある「+」から有料エリアを挿入する"""
+    para_info = page.evaluate("""
         () => {
-            return Array.from(document.querySelectorAll('button')).slice(0,30).map(b => ({
-                text: b.innerText?.trim().slice(0,20),
-                title: b.title?.slice(0,20),
-                aria: b.getAttribute('aria-label')?.slice(0,20),
-            }));
+            const editor = document.querySelector('.ProseMirror');
+            if (!editor) return null;
+            const paras = Array.from(editor.querySelectorAll('p'));
+            for (let i = paras.length - 1; i >= 0; i--) {
+                const paragraph = paras[i];
+                if ((paragraph.innerText || '').trim() === '') {
+                    paragraph.scrollIntoView({block: 'center', behavior: 'instant'});
+                    const rect = paragraph.getBoundingClientRect();
+                    return {left: rect.left, centerY: rect.top + rect.height / 2};
+                }
+            }
+            return null;
         }
     """)
-    print(f"  [DEBUG] ボタン一覧: {btns}")
-    print("  [WARN] 有料エリアボタンが見つかりません")
+    if not para_info:
+        print("  [WARN] 有料エリア用の空段落が見つかりません")
+        return False
+
+    button_x = max(para_info['left'] - 15, 5)
+    button_y = para_info['centerY']
+    page.mouse.move(button_x, button_y)
+    page.wait_for_timeout(600)
+
+    buttons = page.evaluate("""
+        () => Array.from(document.querySelectorAll('button, [role="button"]'))
+            .filter(element => {
+                const rect = element.getBoundingClientRect();
+                const style = window.getComputedStyle(element);
+                return rect.width > 5 && rect.height > 5 && rect.left < 700
+                    && style.display !== 'none' && style.visibility !== 'hidden'
+                    && parseFloat(style.opacity || '1') > 0.3;
+            })
+            .map(element => {
+                const rect = element.getBoundingClientRect();
+                return {
+                    x: Math.round(rect.left + rect.width / 2),
+                    y: Math.round(rect.top + rect.height / 2),
+                    text: (element.innerText || '').slice(0, 20),
+                    aria: element.getAttribute('aria-label') || '',
+                };
+            }).slice(0, 10)
+    """)
+    print(f"  +ボタン候補: {buttons}")
+
+    nearest = min(buttons or [], key=lambda button: abs(button['y'] - button_y), default=None)
+    if nearest and abs(nearest['y'] - button_y) < 80:
+        page.mouse.click(nearest['x'], nearest['y'])
+    else:
+        page.mouse.click(button_x, button_y)
+    page.wait_for_timeout(600)
+    ss(page, 'paid_plus_menu')
+
+    for keyword in ['有料', 'paid']:
+        for selector in [
+            f'[role="menuitem"]:has-text("{keyword}")',
+            f'[role="option"]:has-text("{keyword}")',
+            f'button:has-text("{keyword}")',
+            f'li:has-text("{keyword}")',
+        ]:
+            try:
+                item = page.locator(selector).first
+                if item.is_visible(timeout=500):
+                    item.click()
+                    page.wait_for_timeout(400)
+                    print(f"  有料エリア選択: {selector}")
+                    return True
+            except Exception:
+                pass
+
+    page.keyboard.press('Escape')
+    print("  [WARN] +メニューに有料エリアが見つかりません")
     return False
 
 

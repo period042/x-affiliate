@@ -1,6 +1,11 @@
 name: Paid Note Queue
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/dispatch/paid-queue-retry-2026-11-15'
   schedule:
     - cron: '0 11 * * *' # 20:00 JST
     - cron: '0 21 14 11 *' # 06:00 JST one-time retry for November 15
@@ -51,9 +56,16 @@ jobs:
           DATA_DIR: ${{ github.workspace }}/data
           PYTHONPATH: ${{ github.workspace }}/scripts
         run: |
-          python scripts/post_paid_note.py
-          python scripts/post_paid_note.py
-          python scripts/post_paid_note.py
+          if [ "${{ github.event_name }}" = "push" ] && [ -f "${{ github.workspace }}/.github/dispatch/paid-queue-retry-2026-11-15" ]; then
+            echo "One-time push-triggered retry for the four pending paid articles"
+            for attempt in 1 2 3 4; do
+              python scripts/post_paid_note.py
+            done
+          else
+            python scripts/post_paid_note.py
+            python scripts/post_paid_note.py
+            python scripts/post_paid_note.py
+          fi
           if [ "${{ github.event.schedule }}" = "0 21 14 11 *" ] && [ "$(date -u +%F)" = "2026-11-14" ]; then
             echo "One-time retry for the four unposted articles from November 13"
             python scripts/post_paid_note.py

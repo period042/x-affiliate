@@ -4,6 +4,7 @@ on:
   schedule:
     - cron: '0 11 * * *' # 20:00 JST
     - cron: '0 21 14 11 *' # 06:00 JST one-time retry for November 15
+    - cron: '30 21 14 11 *' # 06:30 JST retry if the 06:00 run was missed
   workflow_dispatch:
 
 concurrency:
@@ -55,6 +56,13 @@ jobs:
           python scripts/post_paid_note.py
           if [ "${{ github.event.schedule }}" = "0 21 14 11 *" ] && [ "$(date -u +%F)" = "2026-11-14" ]; then
             echo "One-time retry for the four unposted articles from November 13"
+            python scripts/post_paid_note.py
+          fi
+          if [ "${{ github.event.schedule }}" = "30 21 14 11 *" ] && [ "$(date -u +%F)" = "2026-11-14" ]; then
+            echo "One-time fallback for the four unposted articles from November 13"
+            python scripts/post_paid_note.py
+            python scripts/post_paid_note.py
+            python scripts/post_paid_note.py
             python scripts/post_paid_note.py
           fi
 

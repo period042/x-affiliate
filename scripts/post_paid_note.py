@@ -94,65 +94,70 @@ def insert_paid_line(page):
     print("  有料ライン挿入中...")
 
     # ツールバーの有料エリアボタンを探す
-    return _click_plus_and_insert_paywall(page)
+    return _click_visible_plus_and_insert_paywall(page)
 
 
-    def _legacy_plus_menu_helper(page):
-        """末尾の空段落にある「+」から有料エリアを挿入する"""
-        para_info = page.evaluate("""
-            () => {
-                const editor = document.querySelector('.ProseMirror');
-                if (!editor) return null;
-                const paragraphs = Array.from(editor.querySelectorAll('p'));
-                for (let index = paragraphs.length - 1; index >= 0; index--) {
-                    const paragraph = paragraphs[index];
-                    if ((paragraph.innerText || '').trim() === '') {
-                        paragraph.scrollIntoView({block: 'center', behavior: 'instant'});
-                        const rect = paragraph.getBoundingClientRect();
-                        return {left: rect.left, centerY: rect.top + rect.height / 2};
-                    }
-                }
-                return null;
-            }
-        """)
-        if not para_info:
+    def _click_plus_with_locator(page):
+        """末尾の空段落を表示して、その横の「+」から有料エリアを挿入する"""
+        paragraphs = page.locator('.ProseMirror p')
+        target_box = None
+        for paragraph_index in range(paragraphs.count() - 1, -1, -1):
+            paragraph = paragraphs.nth(paragraph_index)
+            try:
+                if paragraph.inner_text().strip():
+                    continue
+                paragraph.scroll_into_view_if_needed(timeout=5000)
+                target_box = paragraph.bounding_box()
+                if target_box and target_box['height'] > 0:
+                    break
+            except Exception:
+                continue
+
+        if not target_box:
             print("  [WARN] 有料エリア用の空段落が見つかりません")
             return False
 
-        button_x = max(para_info['left'] - 15, 5)
-        button_y = para_info['centerY']
+        viewport = page.evaluate("() => ({width: window.innerWidth, height: window.innerHeight})")
+        button_x = max(target_box['x'] - 55, 5)
+        button_y = target_box['y'] + target_box['height'] / 2
+        if not (0 <= button_y <= viewport['height'] and 0 <= button_x <= viewport['width']):
+            print(f"  [WARN] +ボタン位置が画面外です: x={button_x}, y={button_y}")
+            return False
+
         page.mouse.move(button_x, button_y)
         page.wait_for_timeout(600)
-
         buttons = page.evaluate("""
             () => Array.from(document.querySelectorAll('button, [role="button"]'))
-                .filter(element => {
-                    const rect = element.getBoundingClientRect();
-                    const style = window.getComputedStyle(element);
-                    return rect.width > 5 && rect.height > 5 && rect.left < 700
-                        && style.display !== 'none' && style.visibility !== 'hidden'
-                        && parseFloat(style.opacity || '1') > 0.3;
-                })
                 .map(element => {
                     const rect = element.getBoundingClientRect();
+                    const style = window.getComputedStyle(element);
                     return {
                         x: Math.round(rect.left + rect.width / 2),
                         y: Math.round(rect.top + rect.height / 2),
+                        width: rect.width,
+                        height: rect.height,
+                        visible: style.display !== 'none' && style.visibility !== 'hidden'
+                            && parseFloat(style.opacity || '1') > 0.3
+                            && rect.right > 0 && rect.left < window.innerWidth
+                            && rect.bottom > 0 && rect.top < window.innerHeight,
                         text: (element.innerText || '').slice(0, 20),
                         aria: element.getAttribute('aria-label') || '',
                     };
-                }).slice(0, 10)
+                })
+                .filter(button => button.visible && button.width > 5 && button.height > 5)
         """)
-        print(f"  +ボタン候補: {buttons}")
+        button = min(
+            buttons,
+            key=lambda candidate: abs(candidate['x'] - button_x) + abs(candidate['y'] - button_y),
+            default=None,
+        )
+        if not button or abs(button['x'] - button_x) > 90 or abs(button['y'] - button_y) > 90:
+            print(f"  [WARN] 空段落横に表示された+ボタンが見つかりません: {buttons}")
+            return False
 
-        nearest = min(buttons or [], key=lambda button: abs(button['y'] - button_y), default=None)
-        if nearest and abs(nearest['y'] - button_y) < 80:
-            page.mouse.click(nearest['x'], nearest['y'])
-        else:
-            page.mouse.click(button_x, button_y)
+        page.mouse.click(button['x'], button['y'])
         page.wait_for_timeout(600)
         ss(page, 'paid_plus_menu')
-
         for keyword in ['有料', 'paid']:
             for selector in [
                 f'[role="menuitem"]:has-text("{keyword}")',
@@ -328,6 +333,86 @@ def set_price_in_modal(page, price):
 
     if not paid_selected or not price_set:
         raise RuntimeError(f"有料設定を確認できませんでした (paid={paid_selected}, price={price_set})")
+
+
+def _click_visible_plus_and_insert_paywall(page):
+    paragraphs = page.locator('.ProseMirror p')
+    target_box = None
+    for paragraph_index in range(paragraphs.count() - 1, -1, -1):
+        paragraph = paragraphs.nth(paragraph_index)
+        try:
+            if paragraph.inner_text().strip():
+                continue
+            paragraph.scroll_into_view_if_needed(timeout=5000)
+            target_box = paragraph.bounding_box()
+            if target_box and target_box['height'] > 0:
+                break
+        except Exception:
+            continue
+
+    if not target_box:
+        print('  [WARN] 有料エリア用の空段落が見つかりません')
+        return False
+
+    viewport = page.evaluate('() => ({width: window.innerWidth, height: window.innerHeight})')
+    button_x = max(target_box['x'] - 55, 5)
+    button_y = target_box['y'] + target_box['height'] / 2
+    if not (0 <= button_x <= viewport['width'] and 0 <= button_y <= viewport['height']):
+        print(f'  [WARN] ＋ボタン位置が画面外です: x={button_x}, y={button_y}')
+        return False
+
+    page.mouse.move(button_x, button_y)
+    page.wait_for_timeout(600)
+    buttons = page.evaluate('''
+        () => Array.from(document.querySelectorAll('button, [role="button"]'))
+            .map(element => {
+                const rect = element.getBoundingClientRect();
+                const style = window.getComputedStyle(element);
+                return {
+                    x: Math.round(rect.left + rect.width / 2),
+                    y: Math.round(rect.top + rect.height / 2),
+                    width: rect.width,
+                    height: rect.height,
+                    visible: style.display !== 'none' && style.visibility !== 'hidden'
+                        && parseFloat(style.opacity || '1') > 0.3
+                        && rect.right > 0 && rect.left < window.innerWidth
+                        && rect.bottom > 0 && rect.top < window.innerHeight,
+                };
+            })
+            .filter(button => button.visible && button.width > 5 && button.height > 5)
+    ''')
+    button = min(
+        buttons,
+        key=lambda item: abs(item['x'] - button_x) + abs(item['y'] - button_y),
+        default=None,
+    )
+    if not button or abs(button['x'] - button_x) > 90 or abs(button['y'] - button_y) > 90:
+        print(f'  [WARN] 空段落横の＋ボタンが見つかりません: {buttons}')
+        return False
+
+    page.mouse.click(button['x'], button['y'])
+    page.wait_for_timeout(600)
+    ss(page, 'paid_plus_menu')
+    for keyword in ['有料', 'paid']:
+        for selector in [
+            f'[role="menuitem"]:has-text("{keyword}")',
+            f'[role="option"]:has-text("{keyword}")',
+            f'button:has-text("{keyword}")',
+            f'li:has-text("{keyword}")',
+        ]:
+            try:
+                item = page.locator(selector).first
+                if item.is_visible(timeout=500):
+                    item.click()
+                    page.wait_for_timeout(400)
+                    print(f'  有料エリア選択: {selector}')
+                    return True
+            except Exception:
+                pass
+
+    page.keyboard.press('Escape')
+    print('  [WARN] ＋メニューに有料エリアが見つかりません')
+    return False
 
 
 def main():

@@ -3,8 +3,7 @@ name: Paid Note Queue
 on:
   schedule:
     - cron: '0 11 * * *' # 20:00 JST
-    - cron: '5 11 13 11 *' # 20:05 JST catch-up for November 13
-    - cron: '30 7 13 11 *' # 16:30 JST on November 13
+    - cron: '0 14 14 11 *' # 23:00 JST one-time retry for November 14
   workflow_dispatch:
 
 concurrency:
@@ -54,8 +53,8 @@ jobs:
           python scripts/post_paid_note.py
           python scripts/post_paid_note.py
           python scripts/post_paid_note.py
-          if [ "${{ github.event.schedule }}" = "0 11 * * *" ] && [ "$(date -u +%F)" = "2026-11-14" ]; then
-            echo "One-time catch-up for the fourth article from November 13"
+          if [ "${{ github.event.schedule }}" = "0 14 14 11 *" ] && [ "$(date -u +%F)" = "2026-11-14" ]; then
+            echo "One-time retry for the four unposted articles from November 13"
             python scripts/post_paid_note.py
           fi
 

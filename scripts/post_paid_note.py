@@ -1079,20 +1079,11 @@ def main():
 
             # [4] タイトル入力
             print("[4] タイトル入力...")
-            page.evaluate("""
-                () => {
-                    const sels = ['[data-placeholder="タイトル"]','[placeholder*="タイトル"]',
-                                  'h1[contenteditable="true"]','[class*="title"][contenteditable]',
-                                  '[contenteditable="true"]'];
-                    for (const s of sels) {
-                        const el = document.querySelector(s);
-                        if (el) { el.focus(); el.click(); el.textContent = '';
-                                  el.dispatchEvent(new Event('input',{bubbles:true})); return s; }
-                    }
-                }
-            """)
-            page.wait_for_timeout(300)
-            page.keyboard.type(title, delay=15)
+            title_box = page.get_by_role('textbox', name='記事タイトル')
+            if title_box.input_value(timeout=10000) != title:
+                title_box.fill(title)
+            if title_box.input_value() != title:
+                raise RuntimeError('タイトルを原稿どおりに入力できませんでした')
             ss(page, '03_title')
 
             # [5] 本文エリアへ移動
@@ -1104,9 +1095,13 @@ def main():
             page.wait_for_timeout(300)
 
             print("[6] 本文を構造化して入力...")
-            clear_article_editor(page)
-            paste_article_html(page, free_html + paid_html)
-            validate_article_structure(page, content, free_html + paid_html)
+            try:
+                validate_article_structure(page, content, free_html + paid_html)
+                print('  保存済み本文が原稿と一致するため再利用')
+            except RuntimeError:
+                clear_article_editor(page)
+                paste_article_html(page, free_html + paid_html)
+                validate_article_structure(page, content, free_html + paid_html)
             ss(page, '06_paid_content')
             print("[7] フォトギャラリーから見出し画像を選択...")
             select_gallery_image(page, article)

@@ -59,6 +59,7 @@ class DraftApiTests(unittest.TestCase):
         response = self.Response({'notes': [{'key': 'n1', 'name': None, 'status': 'draft',
                                             'noteDraft': {'name': 'existing'}}],
                                   'isLastPage': True, 'totalCount': 1})
+        post_paid_note.ensure_no_existing_draft(self.Request(response), 'existing', exclude_key='n1')
         with self.assertRaises(RuntimeError):
             post_paid_note.ensure_no_existing_draft(self.Request(response), 'existing')
         with self.assertRaises(RuntimeError):
@@ -99,6 +100,11 @@ class DraftApiTests(unittest.TestCase):
 
 
 class PaidNoteTests(unittest.TestCase):
+    def test_clear_article_editor_replaces_existing_body(self):
+        self.page.set_content('<div class="ProseMirror" contenteditable="true"><p>old body</p></div>')
+        post_paid_note.clear_article_editor(self.page)
+        self.assertEqual(self.page.locator('.ProseMirror').inner_text().strip(), '')
+
     @classmethod
     def setUpClass(cls):
         cls.playwright = sync_playwright().start()
@@ -153,14 +159,16 @@ class PaidNoteTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             post_paid_note.validate_article_structure(self.page, '## 見出し\n\n本文', html)
 
-    def test_pending_draft_prevents_retry(self):
+    def test_pending_draft_is_reused_and_invalid_url_is_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'article.json'
             article = {'title': 'test'}
-            post_paid_note.ensure_no_pending_draft(article)
+            self.assertIsNone(post_paid_note.ensure_no_pending_draft(article))
             post_paid_note.remember_pending_draft(path, article, 'https://editor.note.com/notes/n123abc/edit/')
+            saved = json.loads(path.read_text(encoding='utf-8'))
+            self.assertEqual(post_paid_note.ensure_no_pending_draft(saved), saved['pending_editor_url'])
             with self.assertRaises(RuntimeError):
-                post_paid_note.ensure_no_pending_draft(json.loads(path.read_text(encoding='utf-8')))
+                post_paid_note.ensure_no_pending_draft({'pending_editor_url': 'https://example.com'})
 
     def test_identical_content_under_different_titles_is_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -245,15 +253,16 @@ class PaidNoteTests(unittest.TestCase):
         self.page.set_content('''
             <main>
               <button onclick="document.querySelector('#open').hidden=false">画像を追加</button>
-              <button id="open" hidden onclick="document.querySelector('#gallery').hidden=false">記事にあう画像を選ぶ</button>
+              <button id="open" hidden onclick="document.querySelector('#stockPhotoModal').hidden=false">記事にあう画像を選ぶ</button>
               <img alt="eyecatch" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==" hidden>
             </main>
-            <div id="gallery" role="dialog" hidden>
+            <div id="popover" role="dialog">popover</div>
+            <div id="stockPhotoModal" role="dialog" hidden>
               <button onclick="document.querySelector('#search').hidden=false">検索する</button>
               <input id="search" hidden aria-label="みんなのフォトギャラリーから検索する"
                 onkeydown="if(event.key==='Enter')document.querySelector('#candidate').hidden=false">
               <div id="candidate" role="button" hidden onclick="document.querySelector('#detail').hidden=false"><figure>image</figure></div>
-              <div id="detail" hidden>不妊治療<button onclick="document.querySelector('#gallery').hidden=true;document.querySelector('#crop').hidden=false">この画像を挿入</button></div>
+              <div id="detail" hidden>不妊治療<button onclick="document.querySelector('#stockPhotoModal').hidden=true;document.querySelector('#crop').hidden=false">この画像を挿入</button></div>
             </div>
             <div id="crop" role="dialog" hidden>
               <button onclick="document.querySelector('#crop').hidden=true;document.querySelector('img').hidden=false">保存</button>

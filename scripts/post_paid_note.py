@@ -79,8 +79,10 @@ def validate_unique_article_content(article_path, article):
 
 
 def ensure_no_pending_draft(article):
-    if article.get('pending_editor_url'):
-        raise RuntimeError(f"既存の下書きまたは公開状態を確認してください: {article['pending_editor_url']}")
+    editor_url = article.get('pending_editor_url')
+    if editor_url and not re.match(r'^https://editor\.note\.com/notes/n[a-z0-9]+/edit/?$', editor_url):
+        raise RuntimeError(f"保存済み下書きURLを確認できません: {editor_url}")
+    return editor_url
 
 
 def remember_pending_draft(article_path, article, editor_url):
@@ -112,7 +114,7 @@ def ensure_no_existing_publication(request, account_urlname, title):
     raise RuntimeError('公開記事一覧が上限を超えました')
 
 
-def ensure_no_existing_draft(request, title):
+def ensure_no_existing_draft(request, title, exclude_key=None):
     def unique_object(pairs):
         result = {}
         for key, value in pairs:
@@ -153,6 +155,8 @@ def ensure_no_existing_draft(request, title):
             if note['key'] in seen:
                 raise RuntimeError(f"記事一覧に重複キーがあります: {note['key']}")
             seen.add(note['key'])
+            if note['key'] == exclude_key:
+                continue
             draft = note.get('noteDraft')
             if note.get('status') == 'draft' and (not isinstance(draft, dict) or not isinstance(draft.get('name'), str)):
                 raise RuntimeError('下書きのタイトルを確認できません')
@@ -317,10 +321,19 @@ def paste_article_html(page, html):
     page.wait_for_timeout(500)
 
 
+def clear_article_editor(page):
+    editor = page.locator('.ProseMirror')
+    editor.click()
+    page.keyboard.press('Control+A')
+    page.keyboard.press('Backspace')
+    if editor.inner_text().strip():
+        raise RuntimeError('既存下書き本文を安全に置き換えられませんでした')
+
+
 def select_gallery_image(page, article):
     page.get_by_role('button', name='画像を追加').click(timeout=10000)
     page.get_by_role('button', name='記事にあう画像を選ぶ').click(timeout=10000)
-    gallery = page.get_by_role('dialog')
+    gallery = page.locator('#stockPhotoModal')
     gallery.get_by_role('button', name='検索する').click(timeout=10000)
     search = gallery.get_by_role('textbox', name='みんなのフォトギャラリーから検索する')
     for keyword in derive_article_hashtags(article):
@@ -334,7 +347,7 @@ def select_gallery_image(page, article):
             detail = gallery.inner_text()
             if keyword in detail:
                 gallery.get_by_role('button', name='この画像を挿入').click(timeout=10000)
-                page.get_by_role('dialog').get_by_role('button', name='保存').click(timeout=10000)
+                page.get_by_role('button', name='保存').click(timeout=10000)
                 page.locator('main img[alt="eyecatch"]').wait_for(state='visible', timeout=15000)
                 print(f"  フォトギャラリー検索: {keyword}")
                 return
@@ -952,7 +965,7 @@ def main():
         print("有料記事がnote_queueにありません")
         sys.exit(0)
 
-    ensure_no_pending_draft(article)
+    pending_editor_url = ensure_no_pending_draft(article)
     validate_unique_article_content(article_path, article)
 
     print(f"投稿開始: {article['title'][:50]}")
@@ -1037,14 +1050,21 @@ def main():
             account_urlname = current_user.json().get('data', {}).get('urlname')
             if not account_urlname:
                 raise RuntimeError('Noteアカウントを確認できません')
-            ensure_no_existing_draft(ctx.request, title)
+            pending_key_match = re.search(r'/notes/(n[a-z0-9]+)/edit/?$', pending_editor_url or '')
+            ensure_no_existing_draft(
+                ctx.request, title,
+                exclude_key=pending_key_match.group(1) if pending_key_match else None,
+            )
             ensure_no_existing_publication(ctx.request, account_urlname, title)
             print(f"  OK: {page.url[:60]}")
 
             # [2] 新規記事ページ
-            print("[2] 新規記事ページへ...")
-            page.goto('https://note.com/notes/new', wait_until='networkidle', timeout=30000)
-            page.wait_for_url(re.compile(r'^https://editor\.note\.com/notes/n[a-z0-9]+/edit/?$'), timeout=30000)
+            print("[2] 記事編集ページへ...")
+            if pending_editor_url:
+                page.goto(pending_editor_url, wait_until='networkidle', timeout=30000)
+            else:
+                page.goto('https://note.com/notes/new', wait_until='networkidle', timeout=30000)
+                page.wait_for_url(re.compile(r'^https://editor\.note\.com/notes/n[a-z0-9]+/edit/?$'), timeout=30000)
             remember_pending_draft(article_path, article, page.url)
             page.wait_for_timeout(5000)
             ss(page, '01_editor')
@@ -1076,6 +1096,7 @@ def main():
             page.wait_for_timeout(300)
 
             print("[6] 本文を構造化して入力...")
+            clear_article_editor(page)
             paste_article_html(page, free_html + paid_html)
             validate_article_structure(page, content, free_html + paid_html)
             ss(page, '06_paid_content')

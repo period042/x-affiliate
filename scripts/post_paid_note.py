@@ -785,6 +785,7 @@ def main():
                 raise RuntimeError("投稿するボタンが無効です")
             ss(page, 'publish_ready')
             api_responses.clear()
+            api_calls.clear()
             post_button.click(timeout=10000, force=True)
             print("  投稿するボタンをクリックしました")
 

@@ -692,26 +692,35 @@ def main():
             except Exception:
                 pass
             page.wait_for_timeout(2000)
+            if paid_part:
+                settings_button = page.locator('button:has-text("有料エリア設定")').last
+                if not settings_button.is_visible(timeout=1500):
+                    raise RuntimeError("有料エリア設定画面へのボタンが見つかりません")
+                settings_button.click()
+                page.wait_for_timeout(2000)
+                ss(page, 'paid_area_page')
 
-            btn_info = page.evaluate("""
-                () => {
-                    const btns = Array.from(document.querySelectorAll('button'));
-                    const b = btns.find(b => (b.innerText||'').trim() === '投稿する');
-                    if (!b) return {found: false};
-                    const rect = b.getBoundingClientRect();
-                    return {found:true, disabled:b.disabled,
-                            x:rect.x, y:rect.y, w:rect.width, h:rect.height};
-                }
-            """)
-            print(f"  ボタン状態: {btn_info}")
+            post_buttons = page.locator('button:has-text("投稿する")')
+            if post_buttons.count() == 0:
+                visible_buttons = page.evaluate("""
+                    () => Array.from(document.querySelectorAll('button'))
+                        .filter(button => {
+                            const rect = button.getBoundingClientRect();
+                            const style = window.getComputedStyle(button);
+                            return rect.width > 0 && rect.height > 0
+                                && style.display !== 'none' && style.visibility !== 'hidden';
+                        })
+                        .map(button => ({text: (button.innerText || '').trim(), disabled: button.disabled}))
+                """)
+                raise RuntimeError(f"投稿するボタンが見つかりません: {visible_buttons}")
 
-            if btn_info.get('found') and not btn_info.get('disabled'):
-                x = btn_info.get('x',0) + btn_info.get('w',0)/2
-                y = btn_info.get('y',0) + btn_info.get('h',0)/2
-                page.mouse.click(x, y)
-                print(f"  投稿クリック: ({x:.0f},{y:.0f})")
-            else:
-                page.click('button:has-text("投稿する")', timeout=5000)
+            post_button = post_buttons.last
+            post_button.scroll_into_view_if_needed(timeout=5000)
+            if not post_button.is_enabled():
+                raise RuntimeError("投稿するボタンが無効です")
+            ss(page, 'publish_ready')
+            post_button.click(timeout=10000)
+            print("  投稿するボタンをクリックしました")
 
             page.wait_for_timeout(10000)
             ss(page, '09_after_publish')

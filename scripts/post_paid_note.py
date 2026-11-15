@@ -309,27 +309,83 @@ def set_price_in_modal(page, price):
         except Exception:
             continue
 
-    price_set = False
-    for sel in [
-        'input[name="price"]',
-        'input[placeholder*="価格"]',
-        'input[placeholder*="円"]',
-        'input[type="number"]',
-        '[class*="price"] input',
-        '[class*="Price"] input',
+    price_input = None
+    price_selector = None
+    for selector in [
+        'input[name="price"]:visible',
+        'input[placeholder*="価格"]:visible',
+        'input[placeholder*="円"]:visible',
+        'input[type="number"]:visible',
+        '[class*="price"] input:visible',
+        '[class*="Price"] input:visible',
     ]:
-        try:
-            el = page.locator(sel).first
-            if not el.is_visible():
+        candidates = page.locator(selector)
+        for candidate_index in range(candidates.count()):
+            candidate = candidates.nth(candidate_index)
+            try:
+                if candidate.is_visible():
+                    price_input = candidate
+                    price_selector = selector
+                    break
+            except Exception:
                 continue
-            el.fill(str(price))
-            el.press('Tab')
-            page.wait_for_timeout(500)
-            price_set = el.input_value().strip() == str(price)
-            print(f"  価格入力: {el.input_value()}円")
+        if price_input:
             break
-        except Exception:
-            continue
+
+    if not price_input:
+        input_index = page.evaluate("""
+            () => {
+                const allInputs = Array.from(document.querySelectorAll('input'));
+                const isVisible = input => {
+                    const rect = input.getBoundingClientRect();
+                    const style = window.getComputedStyle(input);
+                    return rect.width > 0 && rect.height > 0
+                        && rect.right > 0 && rect.left < window.innerWidth
+                        && rect.bottom > 0 && rect.top < window.innerHeight
+                        && style.display !== 'none' && style.visibility !== 'hidden'
+                        && parseFloat(style.opacity || '1') > 0.3;
+                };
+                const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+                let node;
+                while ((node = walker.nextNode())) {
+                    if ((node.textContent || '').trim() !== '価格') continue;
+                    let parent = node.parentElement;
+                    for (let depth = 0; parent && depth < 5; depth++, parent = parent.parentElement) {
+                        const matches = Array.from(parent.querySelectorAll('input'))
+                            .filter(input => isVisible(input)
+                                && !['checkbox', 'radio', 'hidden'].includes(input.type));
+                        if (matches.length === 1) return allInputs.indexOf(matches[0]);
+                    }
+                }
+                return -1;
+            }
+        """)
+        if input_index >= 0:
+            price_input = page.locator('input').nth(input_index)
+            price_selector = 'input associated with 価格 label'
+
+    price_set = False
+    if price_input:
+        try:
+            print(f"  価格欄: {price_selector}; type={price_input.get_attribute('type')}; name={price_input.get_attribute('name')}; placeholder={price_input.get_attribute('placeholder')}")
+            price_input.fill(str(price))
+            price_input.press('Tab')
+            page.wait_for_timeout(500)
+            if price_input.input_value().strip() != str(price):
+                price_input.evaluate("""
+                    (el, value) => {
+                        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+                        setter.call(el, value);
+                        el.dispatchEvent(new Event('input', {bubbles: true}));
+                        el.dispatchEvent(new Event('change', {bubbles: true}));
+                    }
+                """, str(price))
+                price_input.press('Tab')
+                page.wait_for_timeout(500)
+            price_set = price_input.input_value().strip() == str(price)
+            print(f"  価格入力確認: {price_input.input_value()}円 (期待={price}円)")
+        except Exception as error:
+            print(f"  価格入力失敗: {error}")
 
     if not paid_selected or not price_set:
         raise RuntimeError(f"有料設定を確認できませんでした (paid={paid_selected}, price={price_set})")

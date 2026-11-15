@@ -251,6 +251,7 @@ class PaidNoteTests(unittest.TestCase):
 
     def test_gallery_image_is_searched_and_saved(self):
         self.page.set_content('''
+            <button id="draft" onclick="window.draftClicked=true">下書き保存</button>
             <main>
               <button onclick="document.querySelector('#open').hidden=false">画像を追加</button>
               <button id="open" hidden onclick="document.querySelector('#stockPhotoModal').hidden=false">記事にあう画像を選ぶ</button>
@@ -260,16 +261,28 @@ class PaidNoteTests(unittest.TestCase):
             <div id="stockPhotoModal" role="dialog" hidden>
               <button onclick="document.querySelector('#search').hidden=false">検索する</button>
               <input id="search" hidden aria-label="みんなのフォトギャラリーから検索する"
-                onkeydown="if(event.key==='Enter')document.querySelector('#candidate').hidden=false">
-              <div id="candidate" role="button" hidden onclick="document.querySelector('#detail').hidden=false"><figure>image</figure></div>
-              <div id="detail" hidden>不妊治療<button onclick="document.querySelector('#stockPhotoModal').hidden=true;document.querySelector('#crop').hidden=false">この画像を挿入</button></div>
+                onkeydown="if(event.key==='Enter')document.querySelectorAll('.c').forEach(c=>c.hidden=false)">
+              <div class="c" role="button" hidden onclick="show('夏','不妊治療の母','猫','猫')"><figure>a</figure></div>
+              <div class="c" role="button" hidden onclick="show('こんにちは、不妊治療','作者','病院','初診の絵')"><figure>b</figure></div>
+              <div id="detail"></div>
             </div>
             <div id="crop" role="dialog" hidden>
               <button onclick="document.querySelector('#crop').hidden=true;document.querySelector('img').hidden=false">保存</button>
             </div>
+            <script>
+              function show(t, c, k, d) {
+                document.querySelector('#detail').innerHTML =
+                  `<div>タイトル</div><div>${t}</div><div>クリエイター</div><div>${c}</div>` +
+                  `<div>キーワード</div><div>${k}</div><div>説明</div><div>${d}</div>` +
+                  `<button onclick="document.querySelector('#detail').innerHTML=''">この画像を使用しない</button>` +
+                  `<button onclick="window.inserted='${t}';document.querySelector('#stockPhotoModal').hidden=true;document.querySelector('#crop').hidden=false">この画像を挿入</button>`;
+              }
+            </script>
         ''')
         post_paid_note.select_gallery_image(self.page, {'title': '不妊治療の記録', 'genre': '不妊治療'})
         self.assertTrue(self.page.locator('main img[alt="eyecatch"]').is_visible())
+        self.assertEqual(self.page.evaluate('window.inserted'), 'こんにちは、不妊治療')
+        self.assertIsNone(self.page.evaluate('window.draftClicked'))
 
     def test_existing_gallery_image_is_reused(self):
         self.page.set_content('''<main><img alt="eyecatch" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="></main>''')

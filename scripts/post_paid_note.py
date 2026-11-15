@@ -330,6 +330,19 @@ def clear_article_editor(page):
         raise RuntimeError('既存下書き本文を安全に置き換えられませんでした')
 
 
+def gallery_image_metadata(detail_text):
+    # The creator name is excluded because it often contains the search word for unrelated images.
+    lines = [line.strip() for line in detail_text.splitlines() if line.strip()]
+    labels = {'タイトル', 'クリエイター', 'キーワード', '説明', 'キャンセル', 'この画像を挿入'}
+    collected, current = [], None
+    for line in lines:
+        if line in labels:
+            current = line if line in {'タイトル', 'キーワード', '説明'} else None
+        elif current:
+            collected.append(line)
+    return '\n'.join(collected)
+
+
 def select_gallery_image(page, article):
     existing_image = page.locator('img[alt="eyecatch"]')
     if existing_image.count() and existing_image.is_visible():
@@ -346,13 +359,14 @@ def select_gallery_image(page, article):
         search.press('Enter')
         page.wait_for_timeout(1500)
         candidates = gallery.locator('[role="button"]:has(figure)')
-        for index in range(min(candidates.count(), 5)):
+        for index in range(min(candidates.count(), 20)):
             candidates.nth(index).click(timeout=10000)
             page.wait_for_timeout(300)
-            detail = gallery.inner_text()
-            if keyword in detail:
+            if keyword in gallery_image_metadata(gallery.inner_text()):
                 gallery.get_by_role('button', name='この画像を挿入').click(timeout=10000)
-                page.get_by_role('button', name='保存').click(timeout=10000)
+                save = page.get_by_role('button', name='保存', exact=True)
+                page.get_by_role('dialog').filter(has=save).get_by_role(
+                    'button', name='保存', exact=True).click(timeout=10000)
                 image = page.locator('img[alt="eyecatch"]')
                 image.wait_for(state='visible', timeout=15000)
                 if not image.evaluate('element => element.complete && element.naturalWidth > 0'):

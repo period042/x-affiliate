@@ -400,6 +400,35 @@ def set_price_in_modal(page, price):
             except Exception:
                 continue
 
+    if not paid_selected:
+        modal_state = page.evaluate("""
+            () => {
+                const visible = el => {
+                    const rect = el.getBoundingClientRect();
+                    const style = getComputedStyle(el);
+                    return rect.width > 0 && rect.height > 0
+                        && style.display !== 'none' && style.visibility !== 'hidden';
+                };
+                return {
+                    inputs: Array.from(document.querySelectorAll('input')).map(el => ({
+                        type: el.type, name: el.name, placeholder: el.placeholder,
+                        checked: el.checked, visible: visible(el),
+                    })),
+                    controls: Array.from(document.querySelectorAll('button, label, [role="radio"], [role="switch"]'))
+                        .filter(el => /有料|価格|無料/.test(el.innerText || el.getAttribute('aria-label') || ''))
+                        .map(el => ({
+                            tag: el.tagName, text: (el.innerText || '').trim().slice(0, 60),
+                            ariaPressed: el.getAttribute('aria-pressed'),
+                            ariaChecked: el.getAttribute('aria-checked'),
+                            dataState: el.getAttribute('data-state'),
+                            className: String(el.className || '').slice(0, 120),
+                            visible: visible(el),
+                        })).slice(0, 30),
+                };
+            }
+        """)
+        print(f"  有料モーダル診断: {modal_state}")
+
     price_set = False
     if price_input:
         try:

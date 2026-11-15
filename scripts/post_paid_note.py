@@ -393,6 +393,10 @@ def set_price_in_modal(page, price):
             price_input = page.locator('input').nth(input_index)
             price_selector = 'input associated with 価格 label'
 
+    if price_input and not paid_selected:
+        paid_selected = True
+        print("  有料設定: 有料価格欄が表示されています")
+
     price_set = False
     if price_input:
         try:

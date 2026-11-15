@@ -56,6 +56,25 @@ jobs:
       - name: Test paid note safeguards
         run: python -m unittest discover -s tests -p 'test_paid_note.py' -v
 
+      - name: Verify Note account
+        env:
+          NOTE_COOKIES: ${{ secrets.NOTE_COOKIES }}
+        run: |
+          python - <<'PY'
+          import base64
+          import json
+          import os
+          from playwright.sync_api import sync_playwright
+
+          state = json.loads(base64.b64decode(os.environ['NOTE_COOKIES']).decode('utf-8'))
+          with sync_playwright() as playwright:
+              request = playwright.request.new_context(storage_state=state)
+              response = request.get('https://note.com/api/v2/current_user', timeout=20000)
+              if not response.ok or response.json().get('data', {}).get('urlname') != 'english_gaishi':
+                  raise RuntimeError('Note account authentication failed')
+              request.dispose()
+          PY
+
       - name: Post up to three paid articles
         env:
           NOTE_COOKIES: ${{ secrets.NOTE_COOKIES }}

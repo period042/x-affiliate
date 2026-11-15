@@ -79,24 +79,80 @@ def get_published_note_url(api_responses):
     raise RuntimeError("公開完了API応答を確認できません。記事はキューに残します")
 
 
+def public_url_from_editor(editor_url, user_urlname):
+    if editor_url.startswith('https://note.com/') and '/n/' in editor_url:
+        return editor_url
+    match = re.search(r'/notes/(n[a-z0-9]+)/publish/?', editor_url)
+    if not match or not user_urlname:
+        raise RuntimeError(f"公開URLを構成できません: {editor_url}")
+    return f"https://note.com/{user_urlname}/n/{match.group(1)}"
+
+
+def verify_public_note(url, expected_price):
+    import requests
+
+    response = requests.get(url, timeout=20, allow_redirects=True)
+    if response.status_code != 200 or '/n/' not in response.url:
+        raise RuntimeError(f"公開URLを確認できません: HTTP {response.status_code} {response.url}")
+    price_match = re.search(r'\\?"notePrice\\?"\s*:\s*(\d+)', response.text)
+    status_match = re.search(r'\\?"noteStatus\\?"\s*:\s*\\?"([^"\\]+)', response.text)
+    if not price_match or not status_match or status_match.group(1) != 'published':
+        raise RuntimeError("公開ページの公開状態または価格を確認できません")
+    actual_price = int(price_match.group(1))
+    if actual_price != expected_price:
+        raise RuntimeError(f"公開記事の価格が一致しません: {actual_price}円 (期待={expected_price}円)")
+    return actual_price
+
+
 def type_content(page, content):
     """本文をキーボード入力（OGPカード変換なし・高速版）"""
-    LINK_PATTERN = re.compile(r'\[([^\]]+)\]\((https?://[^)]+)\)')
+    link_pattern = re.compile(r'\[([^\]]+)\]\((https?://[^)]+)\)')
+    ordered_pattern = re.compile(r'^\s*(?:\d+[.)]\s*|フェーズ\d+[：:]\s*)(.+)$')
     lines = content.split('\n')
-    for line in lines:
-        if line.startswith('## '):
-            line = '■ ' + line[3:].strip()
+    in_ordered_list = False
+
+    for line_index, line in enumerate(lines):
+        heading = line.startswith('## ')
+        ordered_match = ordered_pattern.match(line)
+
+        if not line.strip():
+            next_is_ordered = any(
+                ordered_pattern.match(next_line)
+                for next_line in lines[line_index + 1:]
+                if next_line.strip()
+            )
+            if in_ordered_list and next_is_ordered:
+                continue
+            if in_ordered_list:
+                page.keyboard.press('Enter')
+                in_ordered_list = False
+            else:
+                page.keyboard.press('Enter')
+            continue
+
+        if in_ordered_list and not ordered_match:
+            page.keyboard.press('Enter')
+            in_ordered_list = False
+
+        if heading:
+            line = line[3:].strip()
+        elif ordered_match:
+            line = ordered_match.group(1).strip()
+            if not in_ordered_list:
+                page.keyboard.press('Control+Shift+7')
+                in_ordered_list = True
+
         line = re.sub(r'\*\*([^*]+)\*\*', r'\1', line)
-        if LINK_PATTERN.search(line):
-            parts = LINK_PATTERN.split(line)
+        if link_pattern.search(line):
+            parts = link_pattern.split(line)
             i = 0
             while i < len(parts):
-                r = i % 3
+                part_type = i % 3
                 chunk = parts[i]
-                if r == 0:
+                if part_type == 0:
                     if chunk:
                         page.keyboard.type(chunk, delay=5)
-                elif r == 1:
+                elif part_type == 1:
                     link_text = chunk
                     link_url = parts[i + 1]
                     page.keyboard.type(link_text, delay=5)
@@ -106,12 +162,16 @@ def type_content(page, content):
                     page.wait_for_timeout(1500)
                     i += 1
                 i += 1
-            page.wait_for_timeout(20)
-        else:
-            if line:
-                page.keyboard.type(line, delay=5)
-            page.keyboard.press('Enter')
-            page.wait_for_timeout(20)
+        elif line:
+            page.keyboard.type(line, delay=5)
+
+        if heading:
+            page.keyboard.press('Control+Alt+2')
+        page.keyboard.press('Enter')
+        page.wait_for_timeout(20)
+
+    if in_ordered_list:
+        page.keyboard.press('Enter')
 
 
 def insert_paid_line(page):
@@ -529,16 +589,24 @@ def move_paywall_before_first_paid_heading(page):
 def _click_visible_plus_and_insert_paywall(page):
     paragraphs = page.locator('.ProseMirror p')
     target_box = None
-    for paragraph_index in range(paragraphs.count() - 1, -1, -1):
+    last_content_index = -1
+    for paragraph_index in range(paragraphs.count()):
         paragraph = paragraphs.nth(paragraph_index)
         try:
-            paragraph_text = paragraph.inner_text().strip()
-            if not paragraph_text:
+            if paragraph.inner_text().strip():
+                last_content_index = paragraph_index
+        except Exception:
+            continue
+
+    for paragraph_index in range(last_content_index + 1, paragraphs.count()):
+        paragraph = paragraphs.nth(paragraph_index)
+        try:
+            if paragraph.inner_text().strip():
                 continue
             paragraph.scroll_into_view_if_needed(timeout=5000)
             target_box = paragraph.bounding_box()
             if target_box and target_box['height'] > 0:
-                print(f'  有料壁直前ブロック: {paragraph_text[:60]}')
+                print('  有料壁位置: 無料部分末尾の空段落')
                 break
         except Exception:
             continue
@@ -656,6 +724,7 @@ def main():
 
     api_calls = []
     api_responses = {}
+    account_urlname = None
 
     with sync_playwright() as p:
         browser = p.chromium.launch(
@@ -676,6 +745,12 @@ def main():
                 api_calls.append(f"{req.method} {req.url}")
 
         def on_response(resp):
+            nonlocal account_urlname
+            if '/api/v2/current_user' in resp.url:
+                try:
+                    account_urlname = resp.json().get('data', {}).get('urlname')
+                except Exception:
+                    pass
             if '/api/' in resp.url and '/text_notes' in resp.url:
                 try:
                     api_responses[resp.url] = (resp.status, resp.text())
@@ -828,8 +903,6 @@ def main():
                 settings_button.click()
                 page.wait_for_timeout(2000)
                 ss(page, 'paid_area_page')
-                move_paywall_before_first_paid_heading(page)
-                ss(page, 'paywall_positioned')
 
             visible_post_buttons = page.locator('button:visible')
             post_buttons = []
@@ -890,17 +963,16 @@ def main():
             for c in api_calls:
                 print(f"  {c}")
 
-            final_url, published_price = get_published_note_url(api_responses)
+            try:
+                final_url, published_price = get_published_note_url(api_responses)
+            except RuntimeError:
+                final_url = public_url_from_editor(page.url, account_urlname)
+                published_price = None
 
-            import requests
-            public_response = requests.get(final_url, timeout=20, allow_redirects=True)
-            if public_response.status_code != 200 or '/n/' not in public_response.url:
+            verified_price = verify_public_note(final_url, price)
+            if published_price is not None and published_price != verified_price:
                 raise RuntimeError(
-                    f"公開URLを確認できません: HTTP {public_response.status_code} {public_response.url}"
-                )
-            if published_price != price:
-                raise RuntimeError(
-                    f"公開記事の価格が一致しません: {published_price}円 (期待={price}円)"
+                    f"APIと公開ページの価格が一致しません: API={published_price}円 / 公開={verified_price}円"
                 )
 
             # アーカイブ

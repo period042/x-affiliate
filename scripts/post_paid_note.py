@@ -16,6 +16,7 @@ from datetime import datetime, timedelta, timezone
 from xml.etree import ElementTree
 import markdown
 from playwright.sync_api import sync_playwright
+from article_checks import validate_heading_bodies
 from note_hashtags import apply_article_hashtags, derive_article_hashtags
 
 sys.stdout.reconfigure(encoding='utf-8')
@@ -70,6 +71,7 @@ def validate_unique_article_content(article_path, article):
         raise ValueError(f"記事本文が空です: {article_path.name}")
     if re.search(r'(?m)^[ \t]*(?:\*\*\* (?:Begin Patch|End Patch|End of File|(?:Add|Update|Delete) File:|Move to:)|diff --git\s|(?:---|\+\+\+) [ab]/|@@)', content):
         raise ValueError(f"記事本文に差分パッチ断片があります: {article_path.name}")
+    validate_heading_bodies(content, article.get('paid_start_marker', '※ここから有料部分'))
     for other_path in QUEUE_DIR.glob('*.json'):
         if other_path == article_path:
             continue

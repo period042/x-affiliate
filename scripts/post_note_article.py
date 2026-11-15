@@ -5,8 +5,13 @@ import json
 import base64
 import sys
 from pathlib import Path
-from datetime import datetime
-from note_hashtags import apply_article_hashtags, is_paid_or_affiliate_article
+import re
+from datetime import datetime, timedelta, timezone
+from article_checks import assert_editor_headings, heading_only_sections
+from note_hashtags import apply_article_hashtags
+
+TOKYO = timezone(timedelta(hours=9))
+HEADING_LINE = re.compile(r'^#{2,3}\s+\S')
 
 NOTE_COOKIES_B64  = os.environ.get('NOTE_COOKIES', '')
 NOTE_EMAIL        = os.environ.get('NOTE_EMAIL', '')
@@ -54,7 +59,7 @@ def load_storage_state():
 
 
 def get_next_article():
-    today = datetime.now().date()
+    today = datetime.now(TOKYO).date()
     for path in sorted(NOTE_QUEUE_DIR.glob('*.json')):
         try:
             # utf-8-sig: BOM付きUTF-8も正しく読む
@@ -66,6 +71,11 @@ def get_next_article():
                 char_count = len(d.get('content', ''))
                 if char_count < 3000:
                     print(f'[SKIP] 文字数不足 {char_count}字 < 3000字: {path.name}')
+                    continue
+                empty_headings = heading_only_sections(d.get('content', ''))
+                if empty_headings:
+                    print(f'[SKIP] 本文のない見出し {empty_headings}: {path.name}')
+                    write_summary(f"⚠️ 本文のない見出しがあるため投稿スキップ: `{path.name}` {empty_headings}")
                     continue
                 return path
         except Exception as e:
@@ -79,8 +89,13 @@ def insert_content_with_ogp(page, content):
     LINK_PATTERN = _link_re.compile(r'\[([^\]]+)\]\((https?://[^)]+)\)')
 
     lines = content.split('\n')
+    after_heading = False
     for line in lines:
         stripped = line.strip()
+        if not stripped and after_heading:
+            # 見出し直後の空行は入力しない（見出しと本文の間に余白が入るため）
+            continue
+        after_heading = bool(HEADING_LINE.match(stripped))
         if stripped.startswith('https://') or stripped.startswith('http://'):
             # 裸のURL → OGPカード変換
             page.keyboard.type(stripped, delay=3)
@@ -424,6 +439,10 @@ def post_article(article_path):
             # URLを単独行でペーストしてOGP変換させる
             insert_content_with_ogp(page, content)
             ss(page, '05_content')
+            assert_editor_headings(
+                page,
+                expected_headings=sum(1 for line in content.splitlines() if HEADING_LINE.match(line.strip())),
+            )
             print("  完了")
 
             # ── 公開に進む ────────────────────────────
@@ -432,12 +451,7 @@ def post_article(article_path):
                 'button:has-text("公開に進む")',
                 'button:has-text("公開設定")',
             ]
-            # 対象記事は、タグ設定前に最終公開ボタンを押さない。
-            if not is_paid_or_affiliate_article(article):
-                publish_settings_selectors.extend([
-                    'button:has-text("公開する")',
-                    'button:has-text("投稿する")',
-                ])
+            # すべての記事で、タグ設定前に最終公開ボタンを押さない。
             settings_opened = False
             for sel in publish_settings_selectors:
                 try:
@@ -447,13 +461,12 @@ def post_article(article_path):
                     break
                 except Exception:
                     continue
-            if is_paid_or_affiliate_article(article) and not settings_opened:
+            if not settings_opened:
                 raise RuntimeError("タグ設定前に公開設定画面を開けませんでした")
             page.wait_for_timeout(3000)
             ss(page, '06_modal')
 
-            if is_paid_or_affiliate_article(article):
-                apply_article_hashtags(page, article)
+            apply_article_hashtags(page, article)
 
             # ── モーダル内でアイキャッチ設定 ──────────
             # [6b] はエディタ段階（[3]）で完了済みのためスキップ

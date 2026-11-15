@@ -62,7 +62,7 @@ def get_next_paid_article():
     return None, None
 
 
-def get_published_note_url(api_responses, expected_price):
+def get_published_note_url(api_responses):
     for status_code, body in api_responses.values():
         if not 200 <= status_code < 300:
             continue
@@ -72,14 +72,10 @@ def get_published_note_url(api_responses, expected_price):
             continue
         if data.get('status') != 'published':
             continue
-        if data.get('price') != expected_price:
-            raise RuntimeError(
-                f"公開記事の価格が一致しません: {data.get('price')}円 (期待={expected_price}円)"
-            )
         note_key = data.get('key')
         user_urlname = (data.get('user') or {}).get('urlname')
         if note_key and user_urlname:
-            return f"https://note.com/{user_urlname}/n/{note_key}"
+            return f"https://note.com/{user_urlname}/n/{note_key}", data.get('price')
     raise RuntimeError("公開完了API応答を確認できません。記事はキューに残します")
 
 
@@ -781,6 +777,7 @@ def main():
             if not post_button.is_enabled():
                 raise RuntimeError("投稿するボタンが無効です")
             ss(page, 'publish_ready')
+            api_responses.clear()
             post_button.click(timeout=10000, force=True)
             print("  投稿するボタンをクリックしました")
 
@@ -814,13 +811,17 @@ def main():
             for c in api_calls:
                 print(f"  {c}")
 
-            final_url = get_published_note_url(api_responses, price)
+            final_url, published_price = get_published_note_url(api_responses)
 
             import requests
             public_response = requests.get(final_url, timeout=20, allow_redirects=True)
             if public_response.status_code != 200 or '/n/' not in public_response.url:
                 raise RuntimeError(
                     f"公開URLを確認できません: HTTP {public_response.status_code} {public_response.url}"
+                )
+            if published_price != price:
+                raise RuntimeError(
+                    f"公開記事の価格が一致しません: {published_price}円 (期待={price}円)"
                 )
 
             # アーカイブ

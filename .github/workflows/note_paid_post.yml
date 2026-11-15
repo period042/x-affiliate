@@ -8,8 +8,7 @@ on:
       - '.github/dispatch/paid-queue-retry-2026-11-15'
   schedule:
     - cron: '0 11 * * *' # 20:00 JST
-    - cron: '0 21 14 11 *' # 06:00 JST one-time retry for November 15
-    - cron: '30 21 14 11 *' # 06:30 JST retry if the 06:00 run was missed
+    - cron: '0 5 15 11 *' # 14:00 JST one-time run for November 15
   workflow_dispatch:
 
 concurrency:
@@ -62,8 +61,8 @@ jobs:
             for attempt in 1 2 3; do
               python scripts/post_paid_note.py
             done
-          elif [ "${{ github.event_name }}" = "schedule" ] && [ "$(date -u +%F)" = "2026-11-15" ]; then
-            echo "One-time November 15 run for the three remaining requested articles"
+          elif [ "${{ github.event_name }}" = "schedule" ] && [ "${{ github.event.schedule }}" = "0 5 15 11 *" ] && [ "$(date -u +%F)" = "2026-11-15" ]; then
+            echo "One-time November 15 14:00 JST run for the three remaining requested articles"
             export PAID_QUEUE_ALLOWLIST="457,478,479"
             for attempt in 1 2 3; do
               python scripts/post_paid_note.py

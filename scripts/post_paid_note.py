@@ -188,6 +188,42 @@ def get_published_note_url(api_responses):
     raise RuntimeError("公開完了API応答を確認できません。記事はキューに残します")
 
 
+def wait_for_published_note(request, account_urlname, title, expected_price):
+    import time
+
+    for attempt in range(6):
+        response = request.get(
+            f'https://note.com/api/v2/creators/{account_urlname}/contents',
+            params={'kind': 'note', 'page': 1}, timeout=20000,
+        )
+        if not response.ok:
+            raise RuntimeError(f'公開記事一覧を確認できません: HTTP {response.status}')
+        try:
+            data = response.json()['data']
+            contents = data['contents']
+            is_last_page = data['isLastPage']
+        except (ValueError, KeyError, TypeError) as exc:
+            raise RuntimeError('公開記事一覧の形式を確認できません') from exc
+        if not isinstance(contents, list) or not isinstance(is_last_page, bool):
+            raise RuntimeError('公開記事一覧の形式を確認できません')
+        for note in contents:
+            if not isinstance(note, dict):
+                raise RuntimeError('公開記事一覧の形式を確認できません')
+            if note.get('name') != title:
+                continue
+            if note.get('status') != 'published':
+                raise RuntimeError('公開一覧に記事はありますが、公開状態ではありません')
+            if type(note.get('price')) is not int or note['price'] != expected_price:
+                raise RuntimeError(f"公開記事の価格が一致しません: {note.get('price')}円 (期待={expected_price}円)")
+            url = note.get('noteUrl')
+            if not isinstance(url, str) or not url.startswith(f'https://note.com/{account_urlname}/n/'):
+                raise RuntimeError('公開記事のURLを確認できません')
+            return url, note['price']
+        if attempt < 5:
+            time.sleep(3)
+    raise RuntimeError(f'公開記事一覧にタイトルが見つかりません: {title}')
+
+
 def public_url_from_editor(editor_url, user_urlname):
     if editor_url.startswith('https://note.com/') and '/n/' in editor_url:
         return editor_url
@@ -1143,17 +1179,10 @@ def main():
             for c in api_calls:
                 print(f"  {c}")
 
-            try:
-                final_url, published_price = get_published_note_url(api_responses)
-            except RuntimeError:
-                final_url = public_url_from_editor(page.url, account_urlname)
-                published_price = None
-
-            verified_price = verify_public_note(final_url, price)
-            if published_price is not None and published_price != verified_price:
-                raise RuntimeError(
-                    f"APIと公開ページの価格が一致しません: API={published_price}円 / 公開={verified_price}円"
-                )
+            final_url, published_price = wait_for_published_note(
+                ctx.request, account_urlname, title, price,
+            )
+            print(f'  公開一覧で確認: {final_url} ({published_price}円)')
 
             # アーカイブ
             POSTED_DIR.mkdir(exist_ok=True)

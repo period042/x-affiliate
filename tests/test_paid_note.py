@@ -196,6 +196,43 @@ class PaidNoteTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             post_paid_note.ensure_no_existing_publication(Request(), 'u', 'second')
 
+    def test_published_note_is_verified_from_creator_list(self):
+        class Response:
+            ok = True
+
+            def json(self):
+                return {'data': {'contents': [{'name': 'title', 'status': 'published',
+                                               'price': 500, 'noteUrl': 'https://note.com/u/n/n123'}],
+                                 'isLastPage': False}}
+
+        class Request:
+            def get(self, url, params, timeout):
+                self.args = (url, params, timeout)
+                return Response()
+
+        request = Request()
+        self.assertEqual(
+            post_paid_note.wait_for_published_note(request, 'u', 'title', 500),
+            ('https://note.com/u/n/n123', 500),
+        )
+        self.assertEqual(request.args[1], {'kind': 'note', 'page': 1})
+
+    def test_published_note_price_mismatch_is_rejected(self):
+        class Response:
+            ok = True
+
+            def json(self):
+                return {'data': {'contents': [{'name': 'title', 'status': 'published',
+                                               'price': 0, 'noteUrl': 'https://note.com/u/n/n123'}],
+                                 'isLastPage': True}}
+
+        class Request:
+            def get(self, *args, **kwargs):
+                return Response()
+
+        with self.assertRaises(RuntimeError):
+            post_paid_note.wait_for_published_note(Request(), 'u', 'title', 500)
+
     def test_hidden_paid_radio_and_price(self):
         self.page.set_content('<input type="radio" value="paid" style="display:none"><div style="height:1200px"></div><div id="holder"></div>')
         self.page.evaluate('''() => document.querySelector('input').addEventListener('click', () => {

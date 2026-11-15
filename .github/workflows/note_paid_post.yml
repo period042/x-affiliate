@@ -8,7 +8,7 @@ on:
       - '.github/dispatch/paid-queue-retry-2026-11-15'
   schedule:
     - cron: '0 11 * * *' # 20:00 JST, normal queue
-    - cron: '0,15,30,45 9 15 11 *' # November 15, 18:00 JST and targeted catch-up
+    - cron: '*/5 11 15 11 *' # November 15, 20:00 JST retry window
   workflow_dispatch:
 
 concurrency:
@@ -85,12 +85,15 @@ jobs:
           DATA_DIR: ${{ github.workspace }}/data
           PYTHONPATH: ${{ github.workspace }}/scripts
         run: |
-          if [ "${{ github.event_name }}" = "schedule" ] && [ "${{ github.event.schedule }}" = "0,15,30,45 9 15 11 *" ]; then
-            if [ "$(date -u +%F)" != "2026-11-15" ]; then
+          if [ "${{ github.event_name }}" = "schedule" ] && [ "$(date -u +%F)" = "2026-11-15" ]; then
+            if [ "${{ github.event.schedule }}" = "0 11 * * *" ] || [ "${{ github.event.schedule }}" = "*/5 11 15 11 *" ]; then
+              echo "One-time 20:00 JST run restricted to paid notes 457, 478, and 479"
+              export PAID_QUEUE_ALLOWLIST="457,478,479"
+            fi
+          fi
+          if [ "${{ github.event_name }}" = "schedule" ] && [ "$(date -u +%F)" != "2026-11-15" ] && [ "${{ github.event.schedule }}" = "*/5 11 15 11 *" ]; then
               echo "The one-time retry only applies on November 15, 2026"
               exit 0
-            fi
-            export PAID_QUEUE_ALLOWLIST="457,478,479"
           fi
           if [ "${{ github.event_name }}" = "push" ] && [ -f "${{ github.workspace }}/.github/dispatch/paid-queue-retry-2026-11-15" ]; then
             echo "One-time push-triggered retry for the three remaining requested articles"

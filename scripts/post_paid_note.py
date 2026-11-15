@@ -341,11 +341,13 @@ def _click_visible_plus_and_insert_paywall(page):
     for paragraph_index in range(paragraphs.count() - 1, -1, -1):
         paragraph = paragraphs.nth(paragraph_index)
         try:
-            if paragraph.inner_text().strip():
+            paragraph_text = paragraph.inner_text().strip()
+            if not paragraph_text:
                 continue
             paragraph.scroll_into_view_if_needed(timeout=5000)
             target_box = paragraph.bounding_box()
             if target_box and target_box['height'] > 0:
+                print(f'  有料壁直前ブロック: {paragraph_text[:60]}')
                 break
         except Exception:
             continue

@@ -15,6 +15,7 @@ from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from playwright.sync_api import sync_playwright
 from generate_note_image import generate as generate_header_image
+from note_hashtags import apply_article_hashtags
 
 sys.stdout.reconfigure(encoding='utf-8')
 
@@ -888,6 +889,7 @@ def main():
                 set_price_in_modal(page, price)
                 ss(page, '08_price')
                 page.wait_for_timeout(1000)
+                apply_article_hashtags(page, article)
 
             # [11] 投稿する
             print("[11] 投稿...")

@@ -6,6 +6,7 @@ import base64
 import sys
 from pathlib import Path
 from datetime import datetime
+from note_hashtags import apply_article_hashtags, is_paid_or_affiliate_article
 
 NOTE_COOKIES_B64  = os.environ.get('NOTE_COOKIES', '')
 NOTE_EMAIL        = os.environ.get('NOTE_EMAIL', '')
@@ -427,20 +428,32 @@ def post_article(article_path):
 
             # ── 公開に進む ────────────────────────────
             print("[6] 公開ボタン...")
-            for sel in [
+            publish_settings_selectors = [
                 'button:has-text("公開に進む")',
                 'button:has-text("公開設定")',
-                'button:has-text("公開する")',
-                'button:has-text("投稿する")',
-            ]:
+            ]
+            # 対象記事は、タグ設定前に最終公開ボタンを押さない。
+            if not is_paid_or_affiliate_article(article):
+                publish_settings_selectors.extend([
+                    'button:has-text("公開する")',
+                    'button:has-text("投稿する")',
+                ])
+            settings_opened = False
+            for sel in publish_settings_selectors:
                 try:
                     page.click(sel, timeout=8000)
                     print(f"  clicked: {sel}")
+                    settings_opened = True
                     break
                 except Exception:
                     continue
+            if is_paid_or_affiliate_article(article) and not settings_opened:
+                raise RuntimeError("タグ設定前に公開設定画面を開けませんでした")
             page.wait_for_timeout(3000)
             ss(page, '06_modal')
+
+            if is_paid_or_affiliate_article(article):
+                apply_article_hashtags(page, article)
 
             # ── モーダル内でアイキャッチ設定 ──────────
             # [6b] はエディタ段階（[3]）で完了済みのためスキップ

@@ -153,7 +153,12 @@ def ensure_no_existing_draft(request, title):
             if note['key'] in seen:
                 raise RuntimeError(f"記事一覧に重複キーがあります: {note['key']}")
             seen.add(note['key'])
-            if note['name'] == title:
+            draft = note.get('noteDraft')
+            if note.get('status') == 'draft' and (not isinstance(draft, dict) or not isinstance(draft.get('name'), str)):
+                raise RuntimeError('下書きのタイトルを確認できません')
+            if draft is not None and (not isinstance(draft, dict) or not isinstance(draft.get('name'), str)):
+                raise RuntimeError('下書きのタイトルを確認できません')
+            if note['name'] == title or (draft and draft['name'] == title):
                 raise RuntimeError(f'同じタイトルの記事が既にあります: {title}')
         if len(seen) > total:
             raise RuntimeError('記事一覧の件数が一致しません')

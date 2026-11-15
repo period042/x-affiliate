@@ -34,7 +34,7 @@ class DraftApiTests(unittest.TestCase):
 
     def test_scans_all_pages_and_rejects_any_matching_status(self):
         pages = [
-            self.Response({'notes': [{'key': 'n1', 'name': 'first', 'status': 'draft'}], 'isLastPage': False, 'totalCount': 2}),
+            self.Response({'notes': [{'key': 'n1', 'name': None, 'status': 'draft', 'noteDraft': {'name': 'first'}}], 'isLastPage': False, 'totalCount': 2}),
             self.Response({'notes': [{'key': 'n2', 'name': 'second', 'status': 'published'}], 'isLastPage': True, 'totalCount': 2}),
         ]
         request = self.Request(*pages)
@@ -52,7 +52,19 @@ class DraftApiTests(unittest.TestCase):
 
     def test_untitled_draft_is_allowed(self):
         post_paid_note.ensure_no_existing_draft(self.Request(self.Response(
-            {'notes': [{'key': 'n1', 'name': None}], 'isLastPage': True, 'totalCount': 1})), 'new')
+            {'notes': [{'key': 'n1', 'name': None, 'status': 'draft', 'noteDraft': {'name': ''}}],
+             'isLastPage': True, 'totalCount': 1})), 'new')
+
+    def test_nested_draft_title_is_checked(self):
+        response = self.Response({'notes': [{'key': 'n1', 'name': None, 'status': 'draft',
+                                            'noteDraft': {'name': 'existing'}}],
+                                  'isLastPage': True, 'totalCount': 1})
+        with self.assertRaises(RuntimeError):
+            post_paid_note.ensure_no_existing_draft(self.Request(response), 'existing')
+        with self.assertRaises(RuntimeError):
+            post_paid_note.ensure_no_existing_draft(self.Request(self.Response(
+                {'notes': [{'key': 'n1', 'name': None, 'status': 'draft'}],
+                 'isLastPage': True, 'totalCount': 1})), 'existing')
 
     def test_invalid_or_incomplete_lists_fail_closed(self):
         first = {'notes': [{'key': 'n1', 'name': 'first'}], 'isLastPage': False, 'totalCount': 2}

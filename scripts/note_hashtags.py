@@ -121,7 +121,7 @@ def derive_article_hashtags(article: dict[str, Any]) -> list[str]:
 def _selected_tags(page) -> list[str]:
     return page.locator("button").evaluate_all(
         "buttons => buttons.filter(button => "
-        "button.querySelector('img[alt=\"削除\"]') && "
+        "button.querySelector('[aria-label=\"削除\"], img[alt=\"削除\"]') && "
         "(button.innerText || '').trim().startsWith('#'))"
         ".map(button => (button.innerText || '').replace(/削除/g, '').trim().replace(/^#/, ''))"
     )
@@ -152,29 +152,31 @@ def apply_article_hashtags(page, article: dict[str, Any]) -> list[str]:
     selected: list[str] = []
     for desired in tags:
         tag_input.fill(desired)
-        page.wait_for_timeout(450)
+        try:
+            page.wait_for_function(
+                "tag => Array.from(document.querySelectorAll('[role=option]')).some(option => "
+                "(option.innerText || '').trim().split('\\n')[0].trim()"
+                ".replace(/\\s+[0-9,]+件.*$/, '').trim() === '#' + tag)",
+                arg=desired,
+                timeout=10000,
+            )
+        except PlaywrightTimeoutError as exc:
+            raise RuntimeError(f"指定したハッシュタグが見つかりません: #{desired}") from exc
         options = page.get_by_role("option").all()
-        if not options:
-            raise RuntimeError(f"ハッシュタグ候補がありません: #{desired}")
-
         exact = None
-        first_hashtag = None
         for option in options:
             label = option.inner_text().strip().splitlines()[0].strip()
-            match = re.match(r"#(.+?)(?:\s+[\d,]+件.*)?$", label)
+            match = re.match(r"#(.+?)(?:\s+[0-9,]+件.*)?$", label)
             if not match:
                 continue
             candidate = match.group(1).strip()
-            if first_hashtag is None:
-                first_hashtag = (option, candidate)
             if candidate == desired:
                 exact = (option, candidate)
                 break
 
-        choice = exact or first_hashtag
-        if choice is None:
+        if exact is None:
             raise RuntimeError(f"選択可能なハッシュタグがありません: #{desired}")
-        option, actual = choice
+        option, actual = exact
         if actual in selected:
             raise RuntimeError(f"異なるタグが重複して選択されました: #{actual}")
         option.click()

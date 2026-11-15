@@ -13,9 +13,10 @@ note_queueの中から paid:true のファイルを対象に処理する。
 import base64, json, sys, os, re
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
+from xml.etree import ElementTree
+import markdown
 from playwright.sync_api import sync_playwright
-from generate_note_image import generate as generate_header_image
-from note_hashtags import apply_article_hashtags
+from note_hashtags import apply_article_hashtags, derive_article_hashtags
 
 sys.stdout.reconfigure(encoding='utf-8')
 
@@ -63,6 +64,108 @@ def get_next_paid_article():
     return None, None
 
 
+def validate_unique_article_content(article_path, article):
+    content = article.get('content', '').strip()
+    if not content:
+        raise ValueError(f"記事本文が空です: {article_path.name}")
+    if re.search(r'(?m)^[ \t]*(?:\*\*\* (?:Begin Patch|End Patch|End of File|(?:Add|Update|Delete) File:|Move to:)|diff --git\s|(?:---|\+\+\+) [ab]/|@@)', content):
+        raise ValueError(f"記事本文に差分パッチ断片があります: {article_path.name}")
+    for other_path in QUEUE_DIR.glob('*.json'):
+        if other_path == article_path:
+            continue
+        other = json.loads(other_path.read_text(encoding='utf-8-sig'))
+        if other.get('title') != article.get('title') and other.get('content', '').strip() == content:
+            raise ValueError(f"別タイトルの記事と本文が重複しています: {article_path.name}, {other_path.name}")
+
+
+def ensure_no_pending_draft(article):
+    if article.get('pending_editor_url'):
+        raise RuntimeError(f"既存の下書きまたは公開状態を確認してください: {article['pending_editor_url']}")
+
+
+def remember_pending_draft(article_path, article, editor_url):
+    if not re.match(r'^https://editor\.note\.com/notes/n[a-z0-9]+/edit/?$', editor_url):
+        raise RuntimeError(f"作成した下書きURLを確認できません: {editor_url}")
+    article['pending_editor_url'] = editor_url
+    article_path.write_text(json.dumps(article, ensure_ascii=False, indent=2), encoding='utf-8')
+
+
+def ensure_no_existing_publication(request, account_urlname, title):
+    for page_number in range(1, 1001):
+        response = request.get(
+            f'https://note.com/api/v2/creators/{account_urlname}/contents',
+            params={'kind': 'note', 'page': page_number}, timeout=20000,
+        )
+        if not response.ok:
+            raise RuntimeError(f"公開記事一覧を確認できません: HTTP {response.status}")
+        data = response.json().get('data', {})
+        contents = data.get('contents')
+        if not isinstance(contents, list) or not isinstance(data.get('isLastPage'), bool):
+            raise RuntimeError('公開記事一覧の形式を確認できません')
+        for existing in contents:
+            if existing.get('name') == title:
+                raise RuntimeError(f"同じタイトルの記事が公開済みです: {existing.get('noteUrl')}")
+        if data['isLastPage']:
+            return
+        if not contents:
+            raise RuntimeError('公開記事一覧の途中で記事が取得できませんでした')
+    raise RuntimeError('公開記事一覧が上限を超えました')
+
+
+def ensure_no_existing_draft(request, title):
+    def unique_object(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f'duplicate JSON key: {key}')
+            result[key] = value
+        return result
+
+    seen = set()
+    total = None
+    for page_number in range(1, 1001):
+        response = request.get(
+            'https://note.com/api/v2/note_list/contents',
+            params={'limit': 100, 'page': page_number}, timeout=20000,
+        )
+        if not response.ok:
+            raise RuntimeError(f'記事一覧を確認できません: HTTP {response.status}')
+        try:
+            body = json.loads(response.text(), object_pairs_hook=unique_object)
+            data = body['data']
+            notes = data['notes']
+            is_last_page = data['isLastPage']
+            page_total = data['totalCount']
+        except (ValueError, KeyError, TypeError) as exc:
+            raise RuntimeError('記事一覧の形式を確認できません') from exc
+        if (not isinstance(notes, list) or not isinstance(is_last_page, bool)
+                or type(page_total) is not int or page_total < 0 or len(notes) > 100):
+            raise RuntimeError('記事一覧の形式を確認できません')
+        if total is None:
+            total = page_total
+        elif total != page_total:
+            raise RuntimeError('記事一覧の件数が途中で変化しました')
+        for note in notes:
+            if (not isinstance(note, dict) or not isinstance(note.get('key'), str)
+                    or not note['key'] or 'name' not in note
+                    or (note['name'] is not None and not isinstance(note['name'], str))):
+                raise RuntimeError('記事一覧の形式を確認できません')
+            if note['key'] in seen:
+                raise RuntimeError(f"記事一覧に重複キーがあります: {note['key']}")
+            seen.add(note['key'])
+            if note['name'] == title:
+                raise RuntimeError(f'同じタイトルの記事が既にあります: {title}')
+        if len(seen) > total:
+            raise RuntimeError('記事一覧の件数が一致しません')
+        if is_last_page:
+            if len(seen) != total:
+                raise RuntimeError('記事一覧の件数が一致しません')
+            return
+        if not notes or len(seen) >= total:
+            raise RuntimeError('記事一覧を全件確認できません')
+    raise RuntimeError('記事一覧がページ数の上限を超えました')
+
+
 def get_published_note_url(api_responses):
     for status_code, body in api_responses.values():
         if not 200 <= status_code < 300:
@@ -103,6 +206,100 @@ def verify_public_note(url, expected_price):
     if actual_price != expected_price:
         raise RuntimeError(f"公開記事の価格が一致しません: {actual_price}円 (期待={expected_price}円)")
     return actual_price
+
+
+def validate_article_structure(page, content, expected_html=None):
+    expected_headings = [line[3:].strip() for line in content.splitlines() if line.startswith('## ')]
+    phase_count = len(re.findall(r'(?m)^\s*(?:\*\*)?フェーズ\d+[：:]', content))
+    structure = page.locator('.ProseMirror').evaluate("""editor => ({
+        headings: Array.from(editor.querySelectorAll('h2')).map(heading => heading.innerText.trim()),
+        orderedItems: editor.querySelectorAll('ol > li').length
+    })""")
+    if structure['headings'] != expected_headings:
+        raise RuntimeError(f"見出し構造が原稿と一致しません: expected={expected_headings}, actual={structure['headings']}")
+    if phase_count and structure['orderedItems'] < phase_count:
+        raise RuntimeError(f"番号付きリストの項目が不足しています: expected={phase_count}, actual={structure['orderedItems']}")
+    if expected_html is not None:
+        matches = page.locator('.ProseMirror').evaluate("""(editor, html) => {
+            const expected = new DOMParser().parseFromString(html, 'text/html').body;
+            const normalize = value => value.replace(/\\s/g, '');
+            const blocks = node => Array.from(node.children).map(block => ({
+                tag: block.tagName, text: normalize(block.textContent)
+            }));
+            return JSON.stringify(blocks(editor)) === JSON.stringify(blocks(expected));
+        }""", expected_html)
+        if not matches:
+            raise RuntimeError('貼り付け後の本文または段落構造が原稿と一致しません')
+
+
+def render_article_html(content):
+    html = markdown.markdown(content, extensions=['nl2br'], output_format='xhtml')
+    root = ElementTree.fromstring(f'<div>{html}</div>')
+    rendered = ElementTree.Element('div')
+    ordered_list = None
+    blocks = list(root)
+    for index, block in enumerate(blocks):
+        text = ''.join(block.itertext()).strip()
+        if block.tag == 'p' and re.match(r'^フェーズ\d+[：:]', text):
+            if ordered_list is None:
+                ordered_list = ElementTree.SubElement(rendered, 'ol')
+            item = ElementTree.SubElement(ordered_list, 'li')
+            item.append(block)
+        else:
+            ordered_list = None
+            rendered.append(block)
+            if block.tag == 'h2' and index + 1 < len(blocks):
+                ElementTree.SubElement(rendered, 'p')
+    return ''.join(ElementTree.tostring(block, encoding='unicode', method='html') for block in rendered), len(rendered)
+
+
+def paste_article_html(page, html):
+    result = page.locator('.ProseMirror').evaluate("""(editor, html) => {
+        editor.focus();
+        const paragraph = editor.querySelector('p');
+        if (!paragraph || editor.textContent.trim()) return false;
+        const range = document.createRange();
+        range.selectNodeContents(paragraph);
+        range.collapse(true);
+        const selection = window.getSelection();
+        selection.removeAllRanges();
+        selection.addRange(range);
+        const data = new DataTransfer();
+        data.setData('text/html', html);
+        data.setData('text/plain', '');
+        return !editor.dispatchEvent(new ClipboardEvent('paste', {
+            clipboardData: data, bubbles: true, cancelable: true
+        }));
+    }""", html)
+    if not result:
+        raise RuntimeError('本文を構造化して貼り付けられませんでした')
+    page.wait_for_timeout(500)
+
+
+def select_gallery_image(page, article):
+    page.get_by_role('button', name='画像を追加').click(timeout=10000)
+    page.get_by_role('button', name='記事にあう画像を選ぶ').click(timeout=10000)
+    gallery = page.get_by_role('dialog')
+    gallery.get_by_role('button', name='検索する').click(timeout=10000)
+    search = gallery.get_by_role('textbox', name='みんなのフォトギャラリーから検索する')
+    for keyword in derive_article_hashtags(article):
+        search.fill(keyword)
+        search.press('Enter')
+        page.wait_for_timeout(1500)
+        candidates = gallery.locator('[role="button"]:has(figure)')
+        for index in range(min(candidates.count(), 5)):
+            candidates.nth(index).click(timeout=10000)
+            page.wait_for_timeout(300)
+            detail = gallery.inner_text()
+            if keyword in detail:
+                gallery.get_by_role('button', name='この画像を挿入').click(timeout=10000)
+                page.get_by_role('dialog').get_by_role('button', name='保存').click(timeout=10000)
+                page.locator('main img[alt="eyecatch"]').wait_for(state='visible', timeout=15000)
+                print(f"  フォトギャラリー検索: {keyword}")
+                return
+            gallery.get_by_role('button', name='この画像を使用しない').click(timeout=10000)
+            page.wait_for_timeout(300)
+    raise RuntimeError('記事に関連するフォトギャラリー画像を確認できませんでした')
 
 
 def type_content(page, content):
@@ -371,6 +568,7 @@ def find_price_input(page):
     price_input = None
     price_selector = None
     for selector in [
+        'input#price:visible',
         'input[name="price"]:visible',
         'input[placeholder*="価格"]:visible',
         'input[placeholder*="円"]:visible',
@@ -438,7 +636,7 @@ def wait_for_price_input(page, timeout):
                         && !['checkbox', 'radio', 'hidden'].includes(input.type);
                 };
                 const direct = Array.from(document.querySelectorAll(
-                    'input[name="price"], input[placeholder*="価格"], input[placeholder*="円"], '
+                    'input#price, input[name="price"], input[placeholder*="価格"], input[placeholder*="円"], '
                     + 'input[type="number"], [class*="price"] input, [class*="Price"] input'
                 )).some(visible);
                 if (direct) return true;
@@ -471,6 +669,10 @@ def set_price_in_modal(page, price):
         print("  有料設定: 有料価格欄が表示されています")
     else:
         paid_option_clicked = False
+        paid_radio = page.locator('input[type="radio"][value="paid"]')
+        if paid_radio.count() == 1:
+            paid_radio.evaluate('(radio) => radio.click()')
+            paid_option_clicked = True
         for sel in [
             'input[type="checkbox"][name*="paid"]',
             'input[type="checkbox"][name*="price"]',
@@ -479,6 +681,8 @@ def set_price_in_modal(page, price):
             'button:has-text("有料")',
             '[class*="PriceToggle"]',
         ]:
+            if paid_option_clicked:
+                break
             try:
                 el = page.locator(sel).first
                 if not el.is_visible():
@@ -587,6 +791,30 @@ def move_paywall_before_first_paid_heading(page):
     page.wait_for_timeout(800)
 
 
+def set_paywall_after_free_blocks(page, free_block_count):
+    result = page.locator('.ProseMirror.paywall-setting').evaluate("""(editor, freeBlockCount) => {
+        const blocks = Array.from(editor.children).filter(element =>
+            !element.classList.contains('ProseMirror-widget'));
+        const boundary = blocks[freeBlockCount - 1];
+        const widget = boundary && boundary.nextElementSibling;
+        const button = widget && widget.querySelector('button');
+        if (!button || !button.innerText.includes('ライン')) return null;
+        button.click();
+        return {block: boundary.innerText.trim(), blockCount: blocks.length};
+    }""", free_block_count)
+    if not result:
+        raise RuntimeError(f"無料部分の直後に有料ラインを設定できません: {free_block_count}")
+    page.wait_for_timeout(500)
+    selected = page.locator('.ProseMirror.paywall-setting').evaluate("""(editor, freeBlockCount) => {
+        const blocks = Array.from(editor.children).filter(element =>
+            !element.classList.contains('ProseMirror-widget'));
+        return blocks[freeBlockCount - 1]?.nextElementSibling?.querySelector('button')?.getAttribute('aria-pressed');
+    }""", free_block_count)
+    if selected != 'true':
+        raise RuntimeError(f"有料ラインの位置を確認できません: {result}")
+    print(f"  有料ライン設定: {result}")
+
+
 def _click_visible_plus_and_insert_paywall(page):
     paragraphs = page.locator('.ProseMirror p')
     target_box = None
@@ -683,6 +911,9 @@ def main():
         print("有料記事がnote_queueにありません")
         sys.exit(0)
 
+    ensure_no_pending_draft(article)
+    validate_unique_article_content(article_path, article)
+
     print(f"投稿開始: {article['title'][:50]}")
     print(f"価格: {article.get('price', 400)}円")
     print(f"文字数: {len(article['content'])}字")
@@ -704,17 +935,8 @@ def main():
         print(f"分割: 無料={len(free_part)}字 / 有料={len(paid_part)}字")
     if not free_part.strip() or not paid_part.strip():
         raise ValueError("無料部分と有料部分の両方に本文が必要です")
-
-    # ヘッダー画像
-    img_path = LOG_DIR / f'header_{article_path.stem}.png'
-    generate_header_image(
-        title,
-        article.get('genre', '不妊治療'),
-        str(img_path),
-        seed_extra=article.get('scheduled_for', ''),
-    )
-    if not img_path.is_file():
-        raise RuntimeError(f"ヘッダー画像を生成できませんでした: {img_path}")
+    free_html, free_block_count = render_article_html(free_part)
+    paid_html, _ = render_article_html(paid_part)
 
     storage_state = None
     cookie_data = os.environ.get('NOTE_COOKIES', '')
@@ -768,63 +990,23 @@ def main():
             page.wait_for_timeout(2000)
             if 'login' in page.url:
                 raise RuntimeError("ログインが必要です。save_note_cookies.pyを実行してください。")
+            current_user = ctx.request.get('https://note.com/api/v2/current_user', timeout=20000)
+            if not current_user.ok:
+                raise RuntimeError(f"Noteのログインを確認できません: HTTP {current_user.status}")
+            account_urlname = current_user.json().get('data', {}).get('urlname')
+            if not account_urlname:
+                raise RuntimeError('Noteアカウントを確認できません')
+            ensure_no_existing_draft(ctx.request, title)
+            ensure_no_existing_publication(ctx.request, account_urlname, title)
             print(f"  OK: {page.url[:60]}")
 
             # [2] 新規記事ページ
             print("[2] 新規記事ページへ...")
             page.goto('https://note.com/notes/new', wait_until='networkidle', timeout=30000)
+            page.wait_for_url(re.compile(r'^https://editor\.note\.com/notes/n[a-z0-9]+/edit/?$'), timeout=30000)
+            remember_pending_draft(article_path, article, page.url)
             page.wait_for_timeout(5000)
             ss(page, '01_editor')
-
-            # [3] アイキャッチ設定
-            if img_path and img_path.exists():
-                print("[3] アイキャッチ設定...")
-                try:
-                    for eyecatch_sel in [
-                        '[class*="eyecatch"]', '[class*="Eyecatch"]',
-                        '[class*="coverImage"]', '[class*="CoverImage"]',
-                        'button[aria-label*="画像"]',
-                    ]:
-                        try:
-                            page.click(eyecatch_sel, timeout=2000)
-                            page.wait_for_timeout(1500)
-                            print(f"  クリック: {eyecatch_sel}")
-                            break
-                        except Exception:
-                            continue
-                    else:
-                        page.mouse.click(519, 125)
-                        page.wait_for_timeout(1500)
-
-                    for upload_text in ["画像をアップロード","写真をアップロード","アップロード","画像を選ぶ"]:
-                        try:
-                            page.click(f'button:has-text("{upload_text}")', timeout=3000)
-                            break
-                        except Exception:
-                            continue
-
-                    file_inputs = page.locator('input[type="file"]').all()
-                    if file_inputs:
-                        file_inputs[0].set_input_files(str(img_path))
-                        page.wait_for_timeout(3000)
-                        saved = page.evaluate("""
-                            () => {
-                                const btns = Array.from(document.querySelectorAll('button'));
-                                const b = [...btns].reverse().find(b => (b.innerText||'').trim() === '保存');
-                                if (b) { b.click(); return true; }
-                                return false;
-                            }
-                        """)
-                        print(f"  保存クリック: {saved}")
-                        page.wait_for_timeout(4000)
-                        print("  アイキャッチ設定完了")
-                    ss(page, '02_eyecatch')
-                except Exception as e:
-                    print(f"  アイキャッチスキップ: {e}")
-                    try:
-                        page.keyboard.press('Escape')
-                    except Exception:
-                        pass
 
             # [4] タイトル入力
             print("[4] タイトル入力...")
@@ -852,23 +1034,13 @@ def main():
                 page.keyboard.press('Tab')
             page.wait_for_timeout(300)
 
-            # [6] 無料部分を入力
-            print("[6] 無料部分入力...")
-            type_content(page, free_part)
-            ss(page, '04_free_content')
-
-            # [7] 有料エリア設定ボタンをクリック
-            if paid_part:
-                print("[7] 有料エリアライン挿入...")
-                result = insert_paid_line(page)
-                ss(page, '05_paid_line')
-                if not result:
-                    raise RuntimeError("Noteの有料エリアを挿入できませんでした")
-
-                # [8] 有料部分を入力
-                print("[8] 有料部分入力...")
-                type_content(page, paid_part)
-                ss(page, '06_paid_content')
+            print("[6] 本文を構造化して入力...")
+            paste_article_html(page, free_html + paid_html)
+            validate_article_structure(page, content, free_html + paid_html)
+            ss(page, '06_paid_content')
+            print("[7] フォトギャラリーから見出し画像を選択...")
+            select_gallery_image(page, article)
+            ss(page, '02_eyecatch')
 
             # [9] 公開に進む
             print("[9] 公開に進む...")
@@ -904,6 +1076,7 @@ def main():
                     raise RuntimeError("有料エリア設定画面へのボタンが見つかりません")
                 settings_button.click()
                 page.wait_for_timeout(2000)
+                set_paywall_after_free_blocks(page, free_block_count)
                 ss(page, 'paid_area_page')
 
             visible_post_buttons = page.locator('button:visible')

@@ -7,8 +7,8 @@ on:
     paths:
       - '.github/dispatch/paid-queue-retry-2026-11-15'
   schedule:
-    - cron: '0 11 * * *' # 20:00 JST
-    - cron: '0 5 15 11 *' # 14:00 JST one-time run for November 15
+    - cron: '0 11 * * *' # 20:00 JST, normal queue
+    - cron: '0,15,30,45 9 15 11 *' # November 15, 18:00 JST and targeted catch-up
   workflow_dispatch:
 
 concurrency:
@@ -32,6 +32,14 @@ jobs:
           token: ${{ secrets.DATA_REPO_PAT }}
           path: data
 
+      - name: Verify data repository identity
+        id: data_auth
+        env:
+          DATA_REPO_PAT: ${{ secrets.DATA_REPO_PAT }}
+        run: |
+          login=$(curl -fsS -H "Authorization: Bearer $DATA_REPO_PAT" https://api.github.com/user | jq -r '.login')
+          test "$login" = "period042"
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
@@ -41,9 +49,12 @@ jobs:
         run: |
           sudo apt-get update -q
           sudo apt-get install -y -q fonts-noto-cjk
-          pip install playwright pillow requests
+          pip install playwright pillow requests markdown
           python -m playwright install chromium
           python -m playwright install-deps chromium
+
+      - name: Test paid note safeguards
+        run: python -m unittest discover -s tests -p 'test_paid_note.py' -v
 
       - name: Post up to three paid articles
         env:
@@ -55,34 +66,20 @@ jobs:
           DATA_DIR: ${{ github.workspace }}/data
           PYTHONPATH: ${{ github.workspace }}/scripts
         run: |
+          if [ "${{ github.event_name }}" = "schedule" ] && [ "${{ github.event.schedule }}" = "0,15,30,45 9 15 11 *" ]; then
+            if [ "$(date -u +%F)" != "2026-11-15" ]; then
+              echo "The one-time retry only applies on November 15, 2026"
+              exit 0
+            fi
+            export PAID_QUEUE_ALLOWLIST="457,478,479"
+          fi
           if [ "${{ github.event_name }}" = "push" ] && [ -f "${{ github.workspace }}/.github/dispatch/paid-queue-retry-2026-11-15" ]; then
             echo "One-time push-triggered retry for the three remaining requested articles"
             export PAID_QUEUE_ALLOWLIST="457,478,479"
-            for attempt in 1 2 3; do
-              python scripts/post_paid_note.py
-            done
-          elif [ "${{ github.event_name }}" = "schedule" ] && [ "${{ github.event.schedule }}" = "0 5 15 11 *" ] && [ "$(date -u +%F)" = "2026-11-15" ]; then
-            echo "One-time November 15 14:00 JST run for the three remaining requested articles"
-            export PAID_QUEUE_ALLOWLIST="457,478,479"
-            for attempt in 1 2 3; do
-              python scripts/post_paid_note.py
-            done
-          else
-            python scripts/post_paid_note.py
-            python scripts/post_paid_note.py
-            python scripts/post_paid_note.py
           fi
-          if [ "${{ github.event.schedule }}" = "0 21 14 11 *" ] && [ "$(date -u +%F)" = "2026-11-14" ]; then
-            echo "One-time retry for the four unposted articles from November 13"
+          for attempt in 1 2 3; do
             python scripts/post_paid_note.py
-          fi
-          if [ "${{ github.event.schedule }}" = "30 21 14 11 *" ] && [ "$(date -u +%F)" = "2026-11-14" ]; then
-            echo "One-time fallback for the four unposted articles from November 13"
-            python scripts/post_paid_note.py
-            python scripts/post_paid_note.py
-            python scripts/post_paid_note.py
-            python scripts/post_paid_note.py
-          fi
+          done
 
       - name: Upload screenshots
         if: always()
@@ -93,7 +90,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Commit queue changes
-        if: always()
+        if: always() && steps.data_auth.outcome == 'success'
         working-directory: data
         run: |
           git config user.name "GitHub Actions Bot"

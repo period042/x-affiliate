@@ -37,8 +37,16 @@ def ss(page, name):
 
 def get_next_paid_article():
     now = datetime.now(TOKYO)
+    allowed_ids = {
+        value.strip()
+        for value in os.environ.get('PAID_QUEUE_ALLOWLIST', '').split(',')
+        if value.strip()
+    }
     for path in sorted(QUEUE_DIR.glob('*.json')):
         try:
+            article_id = re.search(r'note_(\d+)', path.stem)
+            if allowed_ids and (not article_id or article_id.group(1) not in allowed_ids):
+                continue
             d = json.loads(path.read_text(encoding='utf-8-sig'))
             if not d.get('paid'):
                 continue
@@ -52,6 +60,27 @@ def get_next_paid_article():
         except Exception as e:
             print(f'[WARN] {path.name}: {e}')
     return None, None
+
+
+def get_published_note_url(api_responses, expected_price):
+    for status_code, body in api_responses.values():
+        if not 200 <= status_code < 300:
+            continue
+        try:
+            data = json.loads(body).get('data', {})
+        except (json.JSONDecodeError, AttributeError):
+            continue
+        if data.get('status') != 'published':
+            continue
+        if data.get('price') != expected_price:
+            raise RuntimeError(
+                f"公開記事の価格が一致しません: {data.get('price')}円 (期待={expected_price}円)"
+            )
+        note_key = data.get('key')
+        user_urlname = (data.get('user') or {}).get('urlname')
+        if note_key and user_urlname:
+            return f"https://note.com/{user_urlname}/n/{note_key}"
+    raise RuntimeError("公開完了API応答を確認できません。記事はキューに残します")
 
 
 def type_content(page, content):
@@ -519,9 +548,8 @@ def main():
     elif LOCAL_COOKIE_PATH.exists():
         storage_state = json.loads(LOCAL_COOKIE_PATH.read_text(encoding='utf-8'))
 
-    api_calls   = []
-    put_bodies  = {}
-    put_responses = {}
+    api_calls = []
+    api_responses = {}
 
     with sync_playwright() as p:
         browser = p.chromium.launch(
@@ -540,18 +568,13 @@ def main():
         def on_request(req):
             if '/api/' in req.url and req.method in ('POST', 'PUT', 'PATCH'):
                 api_calls.append(f"{req.method} {req.url}")
-                m = re.search(r'/text_notes/(\d+)$', req.url)
-                if m and req.method == 'PUT':
-                    put_bodies[m.group(1)] = req.post_data or ''
 
         def on_response(resp):
-            if '/api/' in resp.url and resp.request.method == 'PUT':
-                m = re.search(r'/text_notes/(\d+)$', resp.url)
-                if m:
-                    try:
-                        put_responses[m.group(1)] = (resp.status, resp.text())
-                    except Exception:
-                        pass
+            if '/api/' in resp.url and '/text_notes' in resp.url:
+                try:
+                    api_responses[resp.url] = (resp.status, resp.text())
+                except Exception:
+                    pass
 
         page.on('request', on_request)
         page.on('response', on_response)
@@ -719,56 +742,47 @@ def main():
             if not post_button.is_enabled():
                 raise RuntimeError("投稿するボタンが無効です")
             ss(page, 'publish_ready')
-            post_button.click(timeout=10000)
+            post_button.click(timeout=10000, force=True)
             print("  投稿するボタンをクリックしました")
 
-            page.wait_for_timeout(10000)
+            try:
+                page.wait_for_url(lambda url: 'editor.note.com' not in url, timeout=20000)
+            except Exception:
+                pass
+            page.wait_for_timeout(2000)
             ss(page, '09_after_publish')
             print(f"  現在URL: {page.url}")
+            if 'editor.note.com' in page.url:
+                visible_state = page.evaluate("""
+                    () => ({
+                        dialogs: Array.from(document.querySelectorAll('[role=dialog]'))
+                            .filter(el => el.getBoundingClientRect().width > 0)
+                            .map(el => (el.innerText || '').trim()),
+                        buttons: Array.from(document.querySelectorAll('button'))
+                            .filter(el => {
+                                const rect = el.getBoundingClientRect();
+                                const style = getComputedStyle(el);
+                                return rect.width > 0 && rect.height > 0
+                                    && style.visibility !== 'hidden' && style.display !== 'none';
+                            })
+                            .map(el => ({text: (el.innerText || '').trim(), disabled: el.disabled}))
+                    })
+                """)
+                print(f"  公開API応答なし。画面状態: {visible_state}")
 
             # 公開後にAPIで価格を確認・補正
             print("\n[APIコール]")
             for c in api_calls:
                 print(f"  {c}")
 
-            # PUT レスポンスからURLを取得
-            final_url = page.url
-            note_key  = None
-            for _id, (_st, _body) in put_responses.items():
-                try:
-                    d = json.loads(_body).get('data', {})
-                    if d.get('key'):
-                        note_key = d['key']
-                        uname    = (d.get('user') or {}).get('urlname', 'sake_to_meshi_3155')
-                        final_url = f"https://note.com/{uname}/n/{note_key}"
-                        print(f"  公開URL: {final_url}")
-                        # 価格が反映されていなければAPI直接で補正
-                        if d.get('price', 0) != price and put_bodies.get(_id):
-                            print(f"  [価格補正] 現在={d.get('price')} → {price}円でPUT")
-                            import requests
-                            raw_cookies = ctx.cookies()
-                            jar = requests.cookies.RequestsCookieJar()
-                            for c in raw_cookies:
-                                if 'note.com' in c.get('domain',''):
-                                    jar.set(c['name'], c['value'],
-                                            domain=c.get('domain',''), path=c.get('path','/'))
-                            sess = requests.Session()
-                            sess.cookies = jar
-                            bd = json.loads(put_bodies[_id])
-                            bd['price'] = price
-                            bd['status'] = 'published'
-                            bd.pop('published_at', None)
-                            r = sess.put(
-                                f'https://note.com/api/v1/text_notes/{_id}',
-                                json=bd,
-                                headers={'Content-Type':'application/json',
-                                         'Referer': page.url},
-                                timeout=15
-                            )
-                            print(f"  価格補正PUT → {r.status_code}")
-                        break
-                except Exception:
-                    pass
+            final_url = get_published_note_url(api_responses, price)
+
+            import requests
+            public_response = requests.get(final_url, timeout=20, allow_redirects=True)
+            if public_response.status_code != 200 or '/n/' not in public_response.url:
+                raise RuntimeError(
+                    f"公開URLを確認できません: HTTP {public_response.status_code} {public_response.url}"
+                )
 
             # アーカイブ
             POSTED_DIR.mkdir(exist_ok=True)

@@ -58,6 +58,7 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "push" ] && [ -f "${{ github.workspace }}/.github/dispatch/paid-queue-retry-2026-11-15" ]; then
             echo "One-time push-triggered retry for the four pending paid articles"
+            export PAID_QUEUE_ALLOWLIST="456,457,478,479"
             for attempt in 1 2 3 4; do
               python scripts/post_paid_note.py
             done

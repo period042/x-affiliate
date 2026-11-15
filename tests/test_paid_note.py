@@ -134,7 +134,8 @@ class PaidNoteTests(unittest.TestCase):
         self.page.set_content('<div class="ProseMirror">' + html + '</div>')
         post_paid_note.validate_article_structure(self.page, free + '\n[有料壁]\n' + paid, html)
         self.assertEqual(self.page.locator('.ProseMirror ol > li').count(), 3)
-        self.assertEqual(self.page.locator('.ProseMirror h2').first.evaluate('el => el.nextElementSibling.tagName'), 'P')
+        self.assertEqual(self.page.locator('.ProseMirror h2').first.evaluate('el => el.nextElementSibling.tagName'), 'OL')
+        self.assertEqual(self.page.locator('.ProseMirror p:empty').count(), 0)
         self.page.evaluate('''() => {
             const editor = document.querySelector('.ProseMirror');
             editor.classList.add('paywall-setting');

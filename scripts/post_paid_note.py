@@ -282,8 +282,7 @@ def render_article_html(content):
     root = ElementTree.fromstring(f'<div>{html}</div>')
     rendered = ElementTree.Element('div')
     ordered_list = None
-    blocks = list(root)
-    for index, block in enumerate(blocks):
+    for block in list(root):
         text = ''.join(block.itertext()).strip()
         if block.tag == 'p' and re.match(r'^フェーズ\d+[：:]', text):
             if ordered_list is None:
@@ -293,8 +292,6 @@ def render_article_html(content):
         else:
             ordered_list = None
             rendered.append(block)
-            if block.tag == 'h2' and index + 1 < len(blocks):
-                ElementTree.SubElement(rendered, 'p')
     return ''.join(ElementTree.tostring(block, encoding='unicode', method='html') for block in rendered), len(rendered)
 
 

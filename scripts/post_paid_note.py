@@ -424,6 +424,39 @@ def set_price_in_modal(page, price):
         raise RuntimeError(f"有料設定を確認できませんでした (paid={paid_selected}, price={price_set})")
 
 
+def move_paywall_before_first_paid_heading(page):
+    result = page.evaluate("""
+        () => {
+            const paidStart = Array.from(document.querySelectorAll('p, div, h1, h2, h3'))
+                .find(el => (el.innerText || '').trim().startsWith('■') && el.children.length <= 2);
+            if (!paidStart) return {method: 'paid-heading-not-found'};
+
+            const candidates = [];
+            const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+            let node;
+            while ((node = walker.nextNode())) {
+                if (!(node.textContent || '').includes('ラインをこの場所に変更')) continue;
+                let element = node.parentElement;
+                while (element && element.tagName === 'SPAN') element = element.parentElement;
+                if (element && !candidates.includes(element)) candidates.push(element);
+            }
+
+            let target = null;
+            for (const candidate of candidates) {
+                if (paidStart.compareDocumentPosition(candidate) & 2) target = candidate;
+            }
+            if (!target) return {method: 'position-before-heading-not-found', count: candidates.length};
+            target.scrollIntoView({block: 'center', behavior: 'instant'});
+            target.click();
+            return {method: 'before-paid-heading', count: candidates.length};
+        }
+    """)
+    print(f"  有料壁位置: {result}")
+    if result.get('method') != 'before-paid-heading':
+        raise RuntimeError(f"有料壁を有料見出し直前に設定できませんでした: {result}")
+    page.wait_for_timeout(800)
+
+
 def _click_visible_plus_and_insert_paywall(page):
     paragraphs = page.locator('.ProseMirror p')
     target_box = None
@@ -726,6 +759,8 @@ def main():
                 settings_button.click()
                 page.wait_for_timeout(2000)
                 ss(page, 'paid_area_page')
+                move_paywall_before_first_paid_heading(page)
+                ss(page, 'paywall_positioned')
 
             post_buttons = page.locator('button:has-text("投稿する")')
             if post_buttons.count() == 0:

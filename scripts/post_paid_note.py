@@ -306,34 +306,7 @@ def _click_plus_and_insert_paywall(page):
     return False
 
 
-def set_price_in_modal(page, price):
-    """公開モーダルで価格を設定する"""
-    print(f"  価格設定: {price}円")
-
-    paid_selected = False
-    for sel in [
-        'input[type="checkbox"][name*="paid"]',
-        'input[type="checkbox"][name*="price"]',
-        'input[type="radio"][value="paid"]',
-        'label:has-text("有料")',
-        'button:has-text("有料")',
-        '[class*="PriceToggle"]',
-    ]:
-        try:
-            el = page.locator(sel).first
-            if not el.is_visible():
-                continue
-            if el.get_attribute('type') == 'checkbox':
-                if not el.is_checked():
-                    el.check()
-            else:
-                el.click()
-            paid_selected = True
-            print(f"  有料設定: {sel}")
-            break
-        except Exception:
-            continue
-
+def find_price_input(page):
     price_input = None
     price_selector = None
     for selector in [
@@ -389,9 +362,43 @@ def set_price_in_modal(page, price):
             price_input = page.locator('input').nth(input_index)
             price_selector = 'input associated with 価格 label'
 
-    if price_input and not paid_selected:
-        paid_selected = True
+    return price_input, price_selector
+
+
+def set_price_in_modal(page, price):
+    """公開モーダルで価格を設定する"""
+    print(f"  価格設定: {price}円")
+
+    price_input, price_selector = find_price_input(page)
+    paid_selected = price_input is not None
+    if paid_selected:
         print("  有料設定: 有料価格欄が表示されています")
+    else:
+        for sel in [
+            'input[type="checkbox"][name*="paid"]',
+            'input[type="checkbox"][name*="price"]',
+            'input[type="radio"][value="paid"]',
+            'label:has-text("有料")',
+            'button:has-text("有料")',
+            '[class*="PriceToggle"]',
+        ]:
+            try:
+                el = page.locator(sel).first
+                if not el.is_visible():
+                    continue
+                if el.get_attribute('type') == 'checkbox':
+                    if not el.is_checked():
+                        el.check()
+                else:
+                    el.click()
+                print(f"  有料設定を選択: {sel}")
+                page.wait_for_timeout(800)
+                price_input, price_selector = find_price_input(page)
+                paid_selected = price_input is not None
+                if paid_selected:
+                    break
+            except Exception:
+                continue
 
     price_set = False
     if price_input:

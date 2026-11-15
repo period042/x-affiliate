@@ -831,8 +831,13 @@ def main():
                 move_paywall_before_first_paid_heading(page)
                 ss(page, 'paywall_positioned')
 
-            post_buttons = page.locator('button:has-text("投稿する")')
-            if post_buttons.count() == 0:
+            visible_post_buttons = page.locator('button:visible')
+            post_buttons = []
+            for button_index in range(visible_post_buttons.count()):
+                candidate = visible_post_buttons.nth(button_index)
+                if candidate.inner_text().strip() == '投稿する':
+                    post_buttons.append(candidate)
+            if not post_buttons:
                 visible_buttons = page.evaluate("""
                     () => Array.from(document.querySelectorAll('button'))
                         .filter(button => {
@@ -845,14 +850,14 @@ def main():
                 """)
                 raise RuntimeError(f"投稿するボタンが見つかりません: {visible_buttons}")
 
-            post_button = post_buttons.last
+            post_button = post_buttons[-1]
             post_button.scroll_into_view_if_needed(timeout=5000)
             if not post_button.is_enabled():
                 raise RuntimeError("投稿するボタンが無効です")
             ss(page, 'publish_ready')
             api_responses.clear()
             api_calls.clear()
-            post_button.click(timeout=10000, force=True)
+            post_button.click(timeout=10000)
             print("  投稿するボタンをクリックしました")
 
             try:

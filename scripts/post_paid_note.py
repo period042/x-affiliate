@@ -365,15 +365,51 @@ def find_price_input(page):
     return price_input, price_selector
 
 
+def wait_for_price_input(page, timeout):
+    try:
+        page.wait_for_function("""
+            () => {
+                const visible = input => {
+                    const rect = input.getBoundingClientRect();
+                    const style = getComputedStyle(input);
+                    return rect.width > 0 && rect.height > 0
+                        && style.display !== 'none' && style.visibility !== 'hidden'
+                        && !['checkbox', 'radio', 'hidden'].includes(input.type);
+                };
+                const direct = Array.from(document.querySelectorAll(
+                    'input[name="price"], input[placeholder*="価格"], input[placeholder*="円"], '
+                    + 'input[type="number"], [class*="price"] input, [class*="Price"] input'
+                )).some(visible);
+                if (direct) return true;
+
+                const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+                let node;
+                while ((node = walker.nextNode())) {
+                    if ((node.textContent || '').trim() !== '価格') continue;
+                    let parent = node.parentElement;
+                    for (let depth = 0; parent && depth < 5; depth++, parent = parent.parentElement) {
+                        if (Array.from(parent.querySelectorAll('input')).some(visible)) return true;
+                    }
+                }
+                return false;
+            }
+        """, timeout=timeout)
+        return True
+    except Exception:
+        return False
+
+
 def set_price_in_modal(page, price):
     """公開モーダルで価格を設定する"""
     print(f"  価格設定: {price}円")
 
+    wait_for_price_input(page, timeout=3000)
     price_input, price_selector = find_price_input(page)
     paid_selected = price_input is not None
     if paid_selected:
         print("  有料設定: 有料価格欄が表示されています")
     else:
+        paid_option_clicked = False
         for sel in [
             'input[type="checkbox"][name*="paid"]',
             'input[type="checkbox"][name*="price"]',
@@ -392,13 +428,14 @@ def set_price_in_modal(page, price):
                 else:
                     el.click()
                 print(f"  有料設定を選択: {sel}")
-                page.wait_for_timeout(800)
-                price_input, price_selector = find_price_input(page)
-                paid_selected = price_input is not None
-                if paid_selected:
-                    break
+                paid_option_clicked = True
+                break
             except Exception:
                 continue
+        if paid_option_clicked:
+            wait_for_price_input(page, timeout=10000)
+            price_input, price_selector = find_price_input(page)
+            paid_selected = price_input is not None
 
     if not paid_selected:
         modal_state = page.evaluate("""

@@ -331,6 +331,11 @@ def clear_article_editor(page):
 
 
 def select_gallery_image(page, article):
+    existing_image = page.locator('img[alt="eyecatch"]')
+    if existing_image.count() and existing_image.is_visible():
+        if existing_image.evaluate('element => element.complete && element.naturalWidth > 0'):
+            print('  既存の見出し画像を再利用')
+            return
     page.get_by_role('button', name='画像を追加').click(timeout=10000)
     page.get_by_role('button', name='記事にあう画像を選ぶ').click(timeout=10000)
     gallery = page.locator('#stockPhotoModal')
@@ -348,7 +353,10 @@ def select_gallery_image(page, article):
             if keyword in detail:
                 gallery.get_by_role('button', name='この画像を挿入').click(timeout=10000)
                 page.get_by_role('button', name='保存').click(timeout=10000)
-                page.locator('main img[alt="eyecatch"]').wait_for(state='visible', timeout=15000)
+                image = page.locator('img[alt="eyecatch"]')
+                image.wait_for(state='visible', timeout=15000)
+                if not image.evaluate('element => element.complete && element.naturalWidth > 0'):
+                    raise RuntimeError('見出し画像を読み込めませんでした')
                 print(f"  フォトギャラリー検索: {keyword}")
                 return
             gallery.get_by_role('button', name='この画像を使用しない').click(timeout=10000)

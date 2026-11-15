@@ -271,6 +271,11 @@ class PaidNoteTests(unittest.TestCase):
         post_paid_note.select_gallery_image(self.page, {'title': '不妊治療の記録', 'genre': '不妊治療'})
         self.assertTrue(self.page.locator('main img[alt="eyecatch"]').is_visible())
 
+    def test_existing_gallery_image_is_reused(self):
+        self.page.set_content('''<main><img alt="eyecatch" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="></main>''')
+        post_paid_note.select_gallery_image(self.page, {'title': '不妊治療の記録', 'genre': '不妊治療'})
+        self.assertTrue(self.page.locator('img[alt="eyecatch"]').is_visible())
+
     def test_delayed_hashtag_suggestions(self):
         self.page.set_content('<div id="chips"></div><input role="combobox" aria-label="ハッシュタグを追加する"><div id="results"></div>')
         self.page.evaluate('''() => {

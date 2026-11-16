@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 import re
 from datetime import datetime, timedelta, timezone
-from article_checks import assert_editor_headings, validate_heading_bodies
+from article_checks import assert_editor_headings, validate_article_text
 from note_hashtags import apply_article_hashtags
 from note_eyecatch import select_gallery_image, used_eyecatch_keys
 
@@ -74,7 +74,7 @@ def get_next_article():
                     print(f'[SKIP] 文字数不足 {char_count}字 < 3000字: {path.name}')
                     continue
                 try:
-                    validate_heading_bodies(d.get('content', ''))
+                    validate_article_text(d.get('content', ''))
                 except ValueError as problem:
                     print(f'[SKIP] {problem}: {path.name}')
                     write_summary(f"⚠️ 本文構成に問題があるため投稿スキップ: `{path.name}` {problem}")

@@ -8,7 +8,7 @@ from pathlib import Path
 
 from note_hashtags import derive_article_hashtags
 
-_DETAIL_LABELS = {'タイトル', 'クリエイター', 'キーワード', '説明', 'キャンセル', 'この画像を挿入'}
+_DETAIL_LABELS = {'タイトル', 'クリエイター', 'キーワード', '説明', 'キャンセル', 'この画像を挿入', 'この画像を使用しない'}
 
 
 def _labelled_text(detail_text: str, wanted: set[str]) -> str:
@@ -25,6 +25,24 @@ def _labelled_text(detail_text: str, wanted: set[str]) -> str:
 def gallery_image_metadata(detail_text: str) -> str:
     # The creator name is excluded because it often contains the search word for unrelated images.
     return _labelled_text(detail_text, {'タイトル', 'キーワード', '説明'})
+
+
+MAX_IMAGE_TAGS = 12
+
+
+def gallery_image_score(detail_text: str, keyword: str, keywords: list[str]) -> int:
+    """Count article keywords found in the image's own tags/description; 0 if the searched keyword is absent.
+
+    The title is ignored because it is the creator's article title, and tag-stuffed images are rejected.
+    """
+    tags = _labelled_text(detail_text, {'キーワード'}).split()
+    description = _labelled_text(detail_text, {'説明'})
+    if len(tags) > MAX_IMAGE_TAGS:
+        return 0
+    if len(description.split()) > MAX_IMAGE_TAGS:
+        description = ''
+    found = [word for word in keywords if word in tags or word in description]
+    return len(found) if keyword in found else 0
 
 
 def gallery_image_key(candidate, detail_text: str) -> str:
@@ -77,7 +95,7 @@ def _wait_for_loaded_eyecatch(page):
 
 
 def select_gallery_image(page, article, used_keys=frozenset()):
-    """Insert a gallery image matching the article and return its key; reuse an eyecatch already on the draft."""
+    """Insert the best-matching unused gallery image and return its key; reuse an eyecatch already on the draft."""
     existing_image = page.locator('img[alt="eyecatch"]')
     if existing_image.count() and existing_image.is_visible():
         if existing_image.evaluate('element => element.complete && element.naturalWidth > 0'):
@@ -88,25 +106,42 @@ def select_gallery_image(page, article, used_keys=frozenset()):
     gallery = page.locator('#stockPhotoModal')
     gallery.get_by_role('button', name='検索する').click(timeout=10000)
     search = gallery.get_by_role('textbox', name='みんなのフォトギャラリーから検索する')
-    for keyword in eyecatch_keywords(article):
+    keywords = eyecatch_keywords(article)
+
+    def show_results(keyword):
         search.fill(keyword)
         search.press('Enter')
         page.wait_for_timeout(1500)
-        candidates = gallery.locator('[role="button"]:has(figure)')
-        for index in range(min(candidates.count(), 30)):
+        return gallery.locator('[role="button"]:has(figure)')
+
+    best = None
+    for keyword in keywords:
+        candidates = show_results(keyword)
+        for index in range(min(candidates.count(), 15)):
             candidate = candidates.nth(index)
             candidate.click(timeout=10000)
             page.wait_for_timeout(300)
             detail = gallery.inner_text()
-            key = gallery_image_key(candidate, detail)
-            if key not in used_keys and keyword in gallery_image_metadata(detail):
-                gallery.get_by_role('button', name='この画像を挿入').click(timeout=10000)
-                save = page.get_by_role('button', name='保存', exact=True)
-                page.get_by_role('dialog').filter(has=save).get_by_role(
-                    'button', name='保存', exact=True).click(timeout=10000)
-                _wait_for_loaded_eyecatch(page)
-                print(f"  フォトギャラリー検索: {keyword} ({key})")
-                return key
             gallery.get_by_role('button', name='この画像を使用しない').click(timeout=10000)
-            page.wait_for_timeout(300)
-    raise RuntimeError('記事に関連する未使用のフォトギャラリー画像を確認できませんでした')
+            page.wait_for_timeout(200)
+            key = gallery_image_key(candidate, detail)
+            score = gallery_image_score(detail, keyword, keywords)
+            if key not in used_keys and score and (best is None or score > best[0]):
+                best = (score, keyword, index, key)
+        if best and best[0] >= 3:
+            break
+    if best is None:
+        raise RuntimeError('記事に関連する未使用のフォトギャラリー画像を確認できませんでした')
+
+    score, keyword, index, key = best
+    candidate = show_results(keyword).nth(index)
+    candidate.click(timeout=10000)
+    page.wait_for_timeout(300)
+    if gallery_image_key(candidate, gallery.inner_text()) != key:
+        raise RuntimeError('選んだフォトギャラリー画像を再表示できませんでした')
+    gallery.get_by_role('button', name='この画像を挿入').click(timeout=10000)
+    save = page.get_by_role('button', name='保存', exact=True)
+    page.get_by_role('dialog').filter(has=save).get_by_role('button', name='保存', exact=True).click(timeout=10000)
+    _wait_for_loaded_eyecatch(page)
+    print(f"  フォトギャラリー検索: {keyword} (一致{score}語, {key})")
+    return key

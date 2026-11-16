@@ -283,7 +283,7 @@ class PaidNoteTests(unittest.TestCase):
               <input id="search" hidden aria-label="みんなのフォトギャラリーから検索する"
                 onkeydown="if(event.key==='Enter')document.querySelectorAll('.c').forEach(c=>c.hidden=false)">
               <div class="c" role="button" hidden onclick="show('夏','不妊治療の母','猫','猫')"><figure>a</figure></div>
-              <div class="c" role="button" hidden onclick="show('こんにちは、不妊治療','作者','病院','初診の絵')"><figure>b</figure></div>
+              <div class="c" role="button" hidden onclick="show('こんにちは、不妊治療','作者','不妊治療 病院','初診の絵')"><figure>b</figure></div>
               <div id="detail"></div>
             </div>
             <div id="crop" role="dialog" hidden>
@@ -354,7 +354,8 @@ class PaidNoteTests(unittest.TestCase):
               <button>検索する</button>
               <input aria-label="みんなのフォトギャラリーから検索する">
               <div role="button" onclick="document.querySelector('#detail').hidden=false"><figure>a</figure></div>
-              <div id="detail" hidden><div>タイトル</div><div>不妊治療</div>
+              <div id="detail" hidden><div>タイトル</div><div>不妊治療</div><div>キーワード</div><div>不妊治療</div>
+                <button onclick="document.querySelector('#detail').hidden=true">この画像を使用しない</button>
                 <button onclick="document.querySelector('#stockPhotoModal').hidden=true;document.querySelector('#crop').hidden=false">この画像を挿入</button></div>
             </div>
             <div id="crop" role="dialog" hidden>

@@ -11,6 +11,7 @@ from playwright.sync_api import sync_playwright
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 import post_note_article
+from note_eyecatch import gallery_image_score
 from article_checks import (
     assert_editor_headings, duplicate_blocks, heading_only_sections, validate_heading_bodies, validate_paid_article,
 )
@@ -60,6 +61,20 @@ class PaidArticleRuleTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, '重複'):
             validate_paid_article(content, self.marker)
         self.assertEqual(duplicate_blocks('## A\n\n本文\n\n## A\n\n別'), ['## A'])
+
+
+class GalleryScoreTests(unittest.TestCase):
+    def detail(self, title, tags, description):
+        return f'タイトル\n{title}\nクリエイター\n作者\nキーワード\n{tags}\n説明\n{description}\nキャンセル\nこの画像を挿入'
+
+    def test_counts_article_keywords_in_tags(self):
+        detail = self.detail('記事', '英会話\n会話\nカフェ', '友人と話す様子')
+        self.assertEqual(gallery_image_score(detail, '会話', ['会話', '英会話', '教室']), 2)
+
+    def test_ignores_title_and_tag_stuffed_images(self):
+        self.assertEqual(gallery_image_score(self.detail('ビジネスの話', 'キャンパス\n大学', '風景'), 'ビジネス', ['ビジネス']), 0)
+        stuffed = ' '.join(f'語{i}' for i in range(20)) + ' ビジネス'
+        self.assertEqual(gallery_image_score(self.detail('t', '', stuffed), 'ビジネス', ['ビジネス']), 0)
 
 
 class FakeKeyboard:

@@ -113,7 +113,9 @@ class DraftApiTests(unittest.TestCase):
                                  '@@ -1 +1 @@', 'diff --git a/a b/a', '--- a/file', '+++ b/file']:
                     with self.subTest(fragment=fragment), self.assertRaises(ValueError):
                         post_paid_note.validate_unique_article_content(path, {'content': '本文\n' + fragment})
-                post_paid_note.validate_unique_article_content(path, {'content': '本文\n\n---\n\n本文'})
+                valid = ('導入' + 'あ' * 1600 + '\n\n---\n\n## 有料部分で手に入るもの\n\n案内\n\n'
+                         '※ここから有料部分\n\n## 有料\n\n' + 'い' * 5000)
+                post_paid_note.validate_unique_article_content(path, {'content': valid})
 
 
 class PaidNoteTests(unittest.TestCase):
@@ -301,6 +303,44 @@ class PaidNoteTests(unittest.TestCase):
         self.assertTrue(self.page.locator('main img[alt="eyecatch"]').is_visible())
         self.assertEqual(self.page.evaluate('window.inserted'), 'こんにちは、不妊治療')
         self.assertIsNone(self.page.evaluate('window.draftClicked'))
+
+    def gallery_fixture(self):
+        return '''
+            <main>
+              <button onclick="document.querySelector('#stockPhotoModal').hidden=false">画像を追加</button>
+              <button>記事にあう画像を選ぶ</button>
+              <img alt="eyecatch" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==" hidden>
+            </main>
+            <div id="stockPhotoModal" role="dialog" hidden>
+              <button>検索する</button>
+              <input aria-label="みんなのフォトギャラリーから検索する" onkeydown="window.searched=(window.searched||[]).concat(this.value)">
+              <div role="button" onclick="show('英会話のレッスン','A','英会話')"><figure>a</figure></div>
+              <div role="button" onclick="show('マンツーマン英会話','B','英会話')"><figure>b</figure></div>
+              <div id="detail"></div>
+            </div>
+            <div id="crop" role="dialog" hidden>
+              <button onclick="document.querySelector('#crop').hidden=true;document.querySelector('img').hidden=false">保存</button>
+            </div>
+            <script>
+              function show(t, c, k) {
+                document.querySelector('#detail').innerHTML =
+                  `<div>タイトル</div><div>${t}</div><div>クリエイター</div><div>${c}</div><div>キーワード</div><div>${k}</div>` +
+                  `<button onclick="document.querySelector('#detail').innerHTML=''">この画像を使用しない</button>` +
+                  `<button onclick="window.inserted='${t}';document.querySelector('#stockPhotoModal').hidden=true;document.querySelector('#crop').hidden=false">この画像を挿入</button>`;
+              }
+            </script>
+        '''
+
+    def test_gallery_skips_images_used_by_other_articles(self):
+        article = {'title': 'マンツーマン英会話', 'genre': '英語学習', 'eyecatch_keywords': ['英会話']}
+        self.page.set_content(self.gallery_fixture())
+        first_key = post_paid_note.select_gallery_image(self.page, article)
+        self.assertEqual(self.page.evaluate('window.inserted'), '英会話のレッスン')
+        self.page.set_content(self.gallery_fixture())
+        second_key = post_paid_note.select_gallery_image(self.page, article, {first_key})
+        self.assertEqual(self.page.evaluate('window.inserted'), 'マンツーマン英会話')
+        self.assertNotEqual(first_key, second_key)
+        self.assertEqual(self.page.evaluate('window.searched')[0], '英会話')
 
     def test_gallery_image_waits_until_saved_image_loads(self):
         gif = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=='

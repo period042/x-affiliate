@@ -7,8 +7,9 @@ import sys
 from pathlib import Path
 import re
 from datetime import datetime, timedelta, timezone
-from article_checks import assert_editor_headings, heading_only_sections
+from article_checks import assert_editor_headings, validate_heading_bodies
 from note_hashtags import apply_article_hashtags
+from note_eyecatch import select_gallery_image, used_eyecatch_keys
 
 TOKYO = timezone(timedelta(hours=9))
 HEADING_LINE = re.compile(r'^#{2,3}\s+\S')
@@ -72,10 +73,11 @@ def get_next_article():
                 if char_count < 3000:
                     print(f'[SKIP] 文字数不足 {char_count}字 < 3000字: {path.name}')
                     continue
-                empty_headings = heading_only_sections(d.get('content', ''))
-                if empty_headings:
-                    print(f'[SKIP] 本文のない見出し {empty_headings}: {path.name}')
-                    write_summary(f"⚠️ 本文のない見出しがあるため投稿スキップ: `{path.name}` {empty_headings}")
+                try:
+                    validate_heading_bodies(d.get('content', ''))
+                except ValueError as problem:
+                    print(f'[SKIP] {problem}: {path.name}')
+                    write_summary(f"⚠️ 本文構成に問題があるため投稿スキップ: `{path.name}` {problem}")
                     continue
                 return path
         except Exception as e:
@@ -205,7 +207,6 @@ def upload_eyecatch(page, image_path):
 
 def post_article(article_path):
     from playwright.sync_api import sync_playwright
-    from generate_note_image import generate as gen_image
 
     with open(article_path, encoding='utf-8-sig') as f:
         article = json.load(f)
@@ -216,34 +217,6 @@ def post_article(article_path):
     scheduled_for = article.get('scheduled_for', '')
     print(f"\n=== 投稿開始: {title[:40]}... ===")
     SCREENSHOT_DIR.mkdir(exist_ok=True)
-
-    # ── ヘッダ画像生成 ────────────────────────────────
-    print("[0] ヘッダ画像生成...")
-    image_path = str(SCREENSHOT_DIR / 'header.png')
-    used_photo_id = None
-    try:
-        today_str = datetime.now().strftime('%Y-%m-%d')
-        tracker_path = DATA_DIR / 'image_tracker.json'
-        try:
-            tracker = json.loads(tracker_path.read_text(encoding='utf-8')) if tracker_path.exists() else {}
-        except Exception:
-            tracker = {}
-        # 今日・同ジャンルで使用済みの写真IDを除外リストに
-        today_used = tracker.get(today_str, {}).get(genre, [])
-        used_photo_id = gen_image(title, genre, image_path, seed_extra=scheduled_for, exclude_photos=today_used)
-        # トラッカー更新
-        if used_photo_id:
-            tracker.setdefault(today_str, {}).setdefault(genre, [])
-            if used_photo_id not in tracker[today_str][genre]:
-                tracker[today_str][genre].append(used_photo_id)
-            # 14日より古いエントリを削除
-            from datetime import timedelta
-            cutoff = (datetime.now() - timedelta(days=14)).strftime('%Y-%m-%d')
-            tracker = {d: v for d, v in tracker.items() if d >= cutoff}
-            tracker_path.write_text(json.dumps(tracker, ensure_ascii=False, indent=2), encoding='utf-8')
-    except Exception as e:
-        print(f"  生成失敗: {e}")
-        image_path = None
 
     storage_state = load_storage_state()
 
@@ -332,65 +305,6 @@ def post_article(article_path):
             if 'login' in page.url:
                 raise RuntimeError("記事ページでログイン要求")
 
-            # ── エディタ上部でアイキャッチを設定 ──────────────────────
-            # 確定フロー: button[data-id="ButtonIcon"] → 「画像をアップロード」→ expect_file_chooser → CropModal保存
-            if image_path and os.path.exists(image_path):
-                print("[3] エディタアイキャッチ設定...")
-                try:
-                    ss(page, '03_editor')
-                    # main 領域内の ButtonIcon を Y座標最小（=最上部）で取得
-                    btn_pos = page.evaluate("""
-                        () => {
-                            const main = document.querySelector('main');
-                            const mainX = main ? main.getBoundingClientRect().left : 300;
-                            const btns = [...document.querySelectorAll('button[data-id="ButtonIcon"]')]
-                                .filter(b => {
-                                    const r = b.getBoundingClientRect();
-                                    return r.left >= mainX - 60 && r.width > 0 && r.height > 0;
-                                })
-                                .sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
-                            if (!btns[0]) return null;
-                            const r = btns[0].getBoundingClientRect();
-                            return {cx: r.left + r.width/2, cy: r.top + r.height/2};
-                        }
-                    """)
-                    if not btn_pos:
-                        raise Exception("ButtonIcon が見つかりません")
-                    print(f"  ButtonIcon cx={btn_pos['cx']:.0f} cy={btn_pos['cy']:.0f}")
-                    page.mouse.click(btn_pos['cx'], btn_pos['cy'])
-                    page.wait_for_timeout(1500)
-                    ss(page, '03b_popup')
-
-                    # expect_file_chooser でファイル選択を捕捉してからアップロードボタンをクリック
-                    with page.expect_file_chooser(timeout=8000) as fc_ctx:
-                        page.click('text=画像をアップロード', timeout=5000)
-                    fc_ctx.value.set_files(image_path)
-                    print("  ファイル設定完了")
-                    page.wait_for_timeout(5000)
-                    ss(page, '03c_crop')
-
-                    # CropModal の「保存」を JS クリック（overlay による遮断を回避）
-                    saved = page.evaluate("""
-                        () => {
-                            const ov = document.querySelector('.CropModal__overlay');
-                            if (!ov) return false;
-                            const b = [...ov.querySelectorAll('button')].find(b => (b.innerText||'').trim() === '保存');
-                            if (b) { b.click(); return true; }
-                            return false;
-                        }
-                    """)
-                    print(f"  保存クリック: {saved}")
-                    page.wait_for_timeout(4000)
-                    ss(page, '03d_after_save')
-                    print("  アイキャッチ設定完了")
-                except Exception as e:
-                    print(f"  エディタアイキャッチスキップ: {e}")
-                    try:
-                        page.keyboard.press('Escape')
-                        page.wait_for_timeout(800)
-                    except Exception:
-                        pass
-
             # ── タイトル入力（JavaScript + keyboard） ─
             print("[4] タイトル入力...")
             found_sel = page.evaluate("""
@@ -444,6 +358,11 @@ def post_article(article_path):
                 expected_headings=sum(1 for line in content.splitlines() if HEADING_LINE.match(line.strip())),
             )
             print("  完了")
+
+            print("[5b] フォトギャラリーから見出し画像を選択...")
+            article['eyecatch_key'] = select_gallery_image(
+                page, article, used_eyecatch_keys(NOTE_POSTED_DIR, NOTE_QUEUE_DIR, exclude=Path(article_path)))
+            ss(page, '05b_eyecatch')
 
             # ── 公開に進む ────────────────────────────
             print("[6] 公開ボタン...")
@@ -776,7 +695,7 @@ def post_article(article_path):
                 f"{status_icon} {'公開確認済み' if verified else '公開未確認（要確認）'}\n"
                 f"- タイトル: {title[:50]}\n"
                 f"- URL: {final_url}\n"
-                f"- アイキャッチ: {'あり' if image_path and os.path.exists(image_path) else 'なし'}\n"
+                f"- アイキャッチ: フォトギャラリー ({article.get('eyecatch_key')})\n"
                 f"- 残りキュー: {remaining}件"
             )
 

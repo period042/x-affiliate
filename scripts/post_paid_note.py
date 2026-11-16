@@ -16,7 +16,8 @@ from datetime import datetime, timedelta, timezone
 from xml.etree import ElementTree
 import markdown
 from playwright.sync_api import sync_playwright
-from article_checks import validate_heading_bodies
+from article_checks import validate_paid_article
+from note_eyecatch import gallery_image_metadata, select_gallery_image, used_eyecatch_keys
 from note_hashtags import apply_article_hashtags, derive_article_hashtags
 
 sys.stdout.reconfigure(encoding='utf-8')
@@ -91,7 +92,7 @@ def validate_unique_article_content(article_path, article):
         raise ValueError(f"記事本文が空です: {article_path.name}")
     if re.search(r'(?m)^[ \t]*(?:\*\*\* (?:Begin Patch|End Patch|End of File|(?:Add|Update|Delete) File:|Move to:)|diff --git\s|(?:---|\+\+\+) [ab]/|@@)', content):
         raise ValueError(f"記事本文に差分パッチ断片があります: {article_path.name}")
-    validate_heading_bodies(content, article.get('paid_start_marker', '※ここから有料部分'))
+    validate_paid_article(content, article.get('paid_start_marker', '※ここから有料部分'))
     for other_path in QUEUE_DIR.glob('*.json'):
         if other_path == article_path:
             continue
@@ -347,65 +348,6 @@ def clear_article_editor(page):
     page.keyboard.press('Backspace')
     if editor.inner_text().strip():
         raise RuntimeError('既存下書き本文を安全に置き換えられませんでした')
-
-
-def gallery_image_metadata(detail_text):
-    # The creator name is excluded because it often contains the search word for unrelated images.
-    lines = [line.strip() for line in detail_text.splitlines() if line.strip()]
-    labels = {'タイトル', 'クリエイター', 'キーワード', '説明', 'キャンセル', 'この画像を挿入'}
-    collected, current = [], None
-    for line in lines:
-        if line in labels:
-            current = line if line in {'タイトル', 'キーワード', '説明'} else None
-        elif current:
-            collected.append(line)
-    return '\n'.join(collected)
-
-
-def select_gallery_image(page, article):
-    existing_image = page.locator('img[alt="eyecatch"]')
-    if existing_image.count() and existing_image.is_visible():
-        if existing_image.evaluate('element => element.complete && element.naturalWidth > 0'):
-            print('  既存の見出し画像を再利用')
-            return
-    page.get_by_role('button', name='画像を追加').click(timeout=10000)
-    page.get_by_role('button', name='記事にあう画像を選ぶ').click(timeout=10000)
-    gallery = page.locator('#stockPhotoModal')
-    gallery.get_by_role('button', name='検索する').click(timeout=10000)
-    search = gallery.get_by_role('textbox', name='みんなのフォトギャラリーから検索する')
-    for keyword in derive_article_hashtags(article):
-        search.fill(keyword)
-        search.press('Enter')
-        page.wait_for_timeout(1500)
-        candidates = gallery.locator('[role="button"]:has(figure)')
-        for index in range(min(candidates.count(), 20)):
-            candidates.nth(index).click(timeout=10000)
-            page.wait_for_timeout(300)
-            if keyword in gallery_image_metadata(gallery.inner_text()):
-                gallery.get_by_role('button', name='この画像を挿入').click(timeout=10000)
-                save = page.get_by_role('button', name='保存', exact=True)
-                page.get_by_role('dialog').filter(has=save).get_by_role(
-                    'button', name='保存', exact=True).click(timeout=10000)
-                image = page.locator('img[alt="eyecatch"]')
-                image.wait_for(state='visible', timeout=15000)
-                try:
-                    loaded = image.first.evaluate(
-                        """element => element.complete && element.naturalWidth > 0 ? true
-                            : new Promise((resolve, reject) => {
-                                element.addEventListener('load', () => resolve(element.naturalWidth > 0), {once: true});
-                                element.addEventListener('error', () => reject(new Error('image error')), {once: true});
-                                setTimeout(() => reject(new Error('image timeout')), 30000);
-                            })"""
-                    )
-                except Exception as exc:
-                    raise RuntimeError('見出し画像を読み込めませんでした') from exc
-                if not loaded:
-                    raise RuntimeError('見出し画像を読み込めませんでした')
-                print(f"  フォトギャラリー検索: {keyword}")
-                return
-            gallery.get_by_role('button', name='この画像を使用しない').click(timeout=10000)
-            page.wait_for_timeout(300)
-    raise RuntimeError('記事に関連するフォトギャラリー画像を確認できませんでした')
 
 
 def type_content(page, content):
@@ -1153,7 +1095,11 @@ def main():
                 validate_article_structure(page, content, free_html + paid_html)
             ss(page, '06_paid_content')
             print("[7] フォトギャラリーから見出し画像を選択...")
-            select_gallery_image(page, article)
+            eyecatch_key = select_gallery_image(
+                page, article, used_eyecatch_keys(POSTED_DIR, QUEUE_DIR, exclude=article_path))
+            if eyecatch_key and eyecatch_key != article.get('eyecatch_key'):
+                article['eyecatch_key'] = eyecatch_key
+                article_path.write_text(json.dumps(article, ensure_ascii=False, indent=2), encoding='utf-8')
             ss(page, '02_eyecatch')
 
             # [9] 公開に進む

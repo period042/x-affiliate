@@ -11,7 +11,9 @@ from playwright.sync_api import sync_playwright
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 import post_note_article
-from article_checks import assert_editor_headings, heading_only_sections, validate_heading_bodies
+from article_checks import (
+    assert_editor_headings, duplicate_blocks, heading_only_sections, validate_heading_bodies, validate_paid_article,
+)
 
 
 class HeadingSourceTests(unittest.TestCase):
@@ -32,6 +34,32 @@ class HeadingSourceTests(unittest.TestCase):
         self.assertEqual(heading_only_sections(content, marker), ['無料の最後'])
         ok = f'導入\n\n## 無料の最後\n本文\n\n{marker}\n\n## 有料1\n本文'
         self.assertEqual(heading_only_sections(ok, marker), [])
+
+
+class PaidArticleRuleTests(unittest.TestCase):
+    marker = '[有料壁]'
+
+    def article(self, paid_chars=5200, hook='## 有料部分で手に入るもの'):
+        free = '導入' + 'あ' * 800 + '\n\n## 見出し\n\n' + 'い' * 800 + f'\n\n{hook}\n\n' + 'う' * 200
+        paid = '## 有料1\n\n' + 'え' * paid_chars
+        return f'{free}\n\n{self.marker}\n\n{paid}'
+
+    def test_accepts_long_paid_part_with_hook(self):
+        validate_paid_article(self.article(), self.marker)
+
+    def test_rejects_short_paid_part(self):
+        with self.assertRaisesRegex(ValueError, '有料部分が短すぎます'):
+            validate_paid_article(self.article(paid_chars=1500), self.marker)
+
+    def test_rejects_missing_hook_heading(self):
+        with self.assertRaisesRegex(ValueError, '案内する見出し'):
+            validate_paid_article(self.article(hook='## まとめ'), self.marker)
+
+    def test_rejects_duplicated_sections(self):
+        content = self.article() + '\n\n## 有料1\n\n' + 'お' * 50
+        with self.assertRaisesRegex(ValueError, '重複'):
+            validate_paid_article(content, self.marker)
+        self.assertEqual(duplicate_blocks('## A\n\n本文\n\n## A\n\n別'), ['## A'])
 
 
 class FakeKeyboard:

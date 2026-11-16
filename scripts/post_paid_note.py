@@ -28,7 +28,27 @@ POSTED_DIR= DATA_DIR / 'note_posted'
 LOG_DIR   = Path('/tmp') if os.environ.get('GITHUB_ACTIONS') else BASE_DIR / 'logs'
 LOCAL_COOKIE_PATH = BASE_DIR / 'note_cookies.json'
 TOKYO = timezone(timedelta(hours=9))
+PAID_DAILY_LIMIT = int(os.environ.get('PAID_DAILY_LIMIT', '3'))
 LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def paid_posts_today(now=None):
+    today = (now or datetime.now(TOKYO)).astimezone(TOKYO).date()
+    count = 0
+    for path in POSTED_DIR.glob('*.json'):
+        try:
+            posted = json.loads(path.read_text(encoding='utf-8-sig'))
+            if not posted.get('paid') or not posted.get('posted_at'):
+                continue
+            posted_at = datetime.fromisoformat(posted['posted_at'])
+        except (ValueError, OSError):
+            continue
+        # Older records were written as naive UTC on GitHub Actions runners.
+        if posted_at.tzinfo is None:
+            posted_at = posted_at.replace(tzinfo=timezone.utc)
+        if posted_at.astimezone(TOKYO).date() == today:
+            count += 1
+    return count
 
 
 def ss(page, name):
@@ -368,7 +388,18 @@ def select_gallery_image(page, article):
                     'button', name='保存', exact=True).click(timeout=10000)
                 image = page.locator('img[alt="eyecatch"]')
                 image.wait_for(state='visible', timeout=15000)
-                if not image.evaluate('element => element.complete && element.naturalWidth > 0'):
+                try:
+                    loaded = image.first.evaluate(
+                        """element => element.complete && element.naturalWidth > 0 ? true
+                            : new Promise((resolve, reject) => {
+                                element.addEventListener('load', () => resolve(element.naturalWidth > 0), {once: true});
+                                element.addEventListener('error', () => reject(new Error('image error')), {once: true});
+                                setTimeout(() => reject(new Error('image timeout')), 30000);
+                            })"""
+                    )
+                except Exception as exc:
+                    raise RuntimeError('見出し画像を読み込めませんでした') from exc
+                if not loaded:
                     raise RuntimeError('見出し画像を読み込めませんでした')
                 print(f"  フォトギャラリー検索: {keyword}")
                 return
@@ -981,6 +1012,11 @@ def _click_visible_plus_and_insert_paywall(page):
 
 
 def main():
+    posted_today = paid_posts_today()
+    if posted_today >= PAID_DAILY_LIMIT:
+        print(f"本日の有料記事は投稿済みです（{posted_today}/{PAID_DAILY_LIMIT}件）")
+        sys.exit(0)
+
     article_path, article = get_next_paid_article()
     if not article_path:
         print("有料記事がnote_queueにありません")
@@ -1223,7 +1259,7 @@ def main():
 
             # アーカイブ
             POSTED_DIR.mkdir(exist_ok=True)
-            result = {**article, 'posted_at': datetime.now().isoformat(),
+            result = {**article, 'posted_at': datetime.now(TOKYO).isoformat(),
                       'url': final_url, 'paid': True, 'price': price}
             (POSTED_DIR / article_path.name).write_text(
                 json.dumps(result, ensure_ascii=False, indent=2), encoding='utf-8')

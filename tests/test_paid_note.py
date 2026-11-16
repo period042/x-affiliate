@@ -13,6 +13,23 @@ import post_paid_note
 from note_hashtags import apply_article_hashtags
 
 
+class DailyLimitTests(unittest.TestCase):
+    def test_counts_only_paid_posts_from_the_current_jst_day(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            posted = Path(tmp)
+            records = {
+                'a.json': {'paid': True, 'posted_at': '2026-11-16T13:33:00'},
+                'b.json': {'paid': True, 'posted_at': '2026-11-16T22:40:00+09:00'},
+                'c.json': {'paid': True, 'posted_at': '2026-11-15T14:59:00'},
+                'd.json': {'paid': False, 'posted_at': '2026-11-16T22:00:00+09:00'},
+            }
+            for name, record in records.items():
+                (posted / name).write_text(json.dumps(record), encoding='utf-8')
+            now = post_paid_note.datetime(2026, 11, 16, 23, 0, tzinfo=post_paid_note.TOKYO)
+            with patch.object(post_paid_note, 'POSTED_DIR', posted):
+                self.assertEqual(post_paid_note.paid_posts_today(now), 2)
+
+
 class DraftApiTests(unittest.TestCase):
     class Response:
         def __init__(self, data=None, status=200, raw=None):
@@ -284,6 +301,28 @@ class PaidNoteTests(unittest.TestCase):
         self.assertTrue(self.page.locator('main img[alt="eyecatch"]').is_visible())
         self.assertEqual(self.page.evaluate('window.inserted'), 'こんにちは、不妊治療')
         self.assertIsNone(self.page.evaluate('window.draftClicked'))
+
+    def test_gallery_image_waits_until_saved_image_loads(self):
+        gif = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=='
+        self.page.set_content(f'''
+            <main>
+              <button onclick="document.querySelector('#stockPhotoModal').hidden=false">画像を追加</button>
+              <button>記事にあう画像を選ぶ</button>
+              <img alt="eyecatch" hidden>
+            </main>
+            <div id="stockPhotoModal" role="dialog" hidden>
+              <button>検索する</button>
+              <input aria-label="みんなのフォトギャラリーから検索する">
+              <div role="button" onclick="document.querySelector('#detail').hidden=false"><figure>a</figure></div>
+              <div id="detail" hidden><div>タイトル</div><div>不妊治療</div>
+                <button onclick="document.querySelector('#stockPhotoModal').hidden=true;document.querySelector('#crop').hidden=false">この画像を挿入</button></div>
+            </div>
+            <div id="crop" role="dialog" hidden>
+              <button onclick="document.querySelector('#crop').hidden=true;const img=document.querySelector('img');img.hidden=false;setTimeout(()=>img.src='{gif}',1000)">保存</button>
+            </div>
+        ''')
+        post_paid_note.select_gallery_image(self.page, {'title': '不妊治療の記録', 'genre': '不妊治療'})
+        self.assertTrue(self.page.locator('img[alt="eyecatch"]').evaluate('element => element.naturalWidth > 0'))
 
     def test_existing_gallery_image_is_reused(self):
         self.page.set_content('''<main><img alt="eyecatch" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="></main>''')

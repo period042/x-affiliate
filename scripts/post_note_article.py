@@ -851,6 +851,12 @@ def _add_note_promo_to_threads_queue(article_path: Path):
 
 
 def main():
+    jst_hour = datetime.now(TOKYO).hour
+    if jst_hour < 7:
+        print(f"深夜帯（JST {jst_hour}時）のため投稿しません")
+        write_summary(f"## note投稿\n⏸️ 深夜帯（JST {jst_hour}時）のためスキップ")
+        sys.exit(0)
+
     has_cookie = bool(NOTE_COOKIES_B64 or LOCAL_COOKIE_PATH.exists())
     has_passwd = bool(NOTE_EMAIL and NOTE_PASSWORD)
     if not has_cookie and not has_passwd:

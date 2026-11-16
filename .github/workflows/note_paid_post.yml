@@ -5,14 +5,20 @@ on:
     branches:
       - main
     paths:
-      - '.github/dispatch/paid-queue-retry-2026-11-15'
+      - '.github/dispatch/paid-post-now'
   schedule:
-    - cron: '0 11 * * *' # 20:00 JST, normal queue
-    - cron: '*/5 11 15 11 *' # November 15, 20:00 JST retry window
+    # GitHub drops or delays single cron events, so the 20:00-23:59 JST window is covered by several runs.
+    - cron: '0 11 * * *'
+    - cron: '23 11 * * *'
+    - cron: '47 11 * * *'
+    - cron: '13 12 * * *'
+    - cron: '41 12 * * *'
+    - cron: '19 13 * * *'
+    - cron: '53 13 * * *'
   workflow_dispatch:
 
 concurrency:
-  group: note-auto-post
+  group: note-paid-post
   cancel-in-progress: false
 
 jobs:
@@ -85,19 +91,10 @@ jobs:
           DATA_DIR: ${{ github.workspace }}/data
           PYTHONPATH: ${{ github.workspace }}/scripts
         run: |
-          if [ "${{ github.event_name }}" = "schedule" ] && [ "$(date -u +%F)" = "2026-11-15" ]; then
-            if [ "${{ github.event.schedule }}" = "0 11 * * *" ] || [ "${{ github.event.schedule }}" = "*/5 11 15 11 *" ]; then
-              echo "One-time 20:00 JST run restricted to paid notes 457, 478, and 479"
-              export PAID_QUEUE_ALLOWLIST="457,478,479"
-            fi
-          fi
-          if [ "${{ github.event_name }}" = "schedule" ] && [ "$(date -u +%F)" != "2026-11-15" ] && [ "${{ github.event.schedule }}" = "*/5 11 15 11 *" ]; then
-              echo "The one-time retry only applies on November 15, 2026"
-              exit 0
-          fi
-          if [ "${{ github.event_name }}" = "push" ] && [ -f "${{ github.workspace }}/.github/dispatch/paid-queue-retry-2026-11-15" ]; then
-            echo "One-time push-triggered retry for the three remaining requested articles"
-            export PAID_QUEUE_ALLOWLIST="457,478,479"
+          jst_hour=$(TZ=Asia/Tokyo date +%H)
+          if [ "${{ github.event_name }}" = "schedule" ] && [ "$jst_hour" -lt 20 ]; then
+            echo "Delayed schedule event outside the 20:00-23:59 JST window (JST hour $jst_hour); skipped"
+            exit 0
           fi
           for attempt in 1 2 3; do
             python scripts/post_paid_note.py

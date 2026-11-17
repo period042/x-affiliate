@@ -342,6 +342,45 @@ class PaidNoteTests(unittest.TestCase):
         self.assertNotEqual(first_key, second_key)
         self.assertEqual(self.page.evaluate('window.searched')[0], '英会話')
 
+    def test_gallery_finds_chosen_image_after_results_are_reordered(self):
+        gif = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=='
+        self.page.set_content(f'''
+            <main>
+              <button onclick="document.querySelector('#stockPhotoModal').hidden=false">画像を追加</button>
+              <button>記事にあう画像を選ぶ</button>
+              <img alt="eyecatch" src="{gif}" hidden>
+            </main>
+            <div id="stockPhotoModal" role="dialog" hidden>
+              <button>検索する</button>
+              <input aria-label="みんなのフォトギャラリーから検索する" onkeydown="if(event.key==='Enter')render(this.value)">
+              <div id="results"></div>
+              <div id="detail"></div>
+            </div>
+            <div id="crop" role="dialog" hidden>
+              <button onclick="document.querySelector('#crop').hidden=true;document.querySelector('main img').hidden=false">保存</button>
+            </div>
+            <script>
+              const images = [['a.jpg', '英会話'], ['b.jpg', '英会話 英語学習 マンツーマン英会話']];
+              const searches = {{}};
+              function render(keyword) {{
+                searches[keyword] = (searches[keyword] || 0) + 1;
+                const order = searches[keyword] > 1 ? [...images].reverse() : images;
+                document.querySelector('#results').innerHTML = order.map(([src, tags]) =>
+                  `<div role="button" onclick="show('${{src}}','${{tags}}')"><figure><img src="${{src}}?w=100">${{src}}</figure></div>`).join('');
+              }}
+              function show(src, tags) {{
+                document.querySelector('#detail').innerHTML =
+                  `<div role="button"><figure><img src="large.jpg">preview</figure></div>` +
+                  `<div>タイトル</div><div>${{src}}</div><div>キーワード</div><div>${{tags}}</div>` +
+                  `<button onclick="document.querySelector('#detail').innerHTML=''">この画像を使用しない</button>` +
+                  `<button onclick="window.inserted='${{src}}';document.querySelector('#stockPhotoModal').hidden=true;document.querySelector('#crop').hidden=false">この画像を挿入</button>`;
+              }}
+            </script>
+        ''')
+        article = {'title': 'マンツーマン英会話', 'genre': '英語学習', 'eyecatch_keywords': ['英会話']}
+        post_paid_note.select_gallery_image(self.page, article)
+        self.assertEqual(self.page.evaluate('window.inserted'), 'b.jpg')
+
     def test_gallery_image_waits_until_saved_image_loads(self):
         gif = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=='
         self.page.set_content(f'''

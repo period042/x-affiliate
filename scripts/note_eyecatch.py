@@ -45,9 +45,7 @@ def gallery_image_score(detail_text: str, keyword: str, keywords: list[str]) -> 
     return len(found) if keyword in found else 0
 
 
-def gallery_image_key(candidate, detail_text: str) -> str:
-    image = candidate.locator('img')
-    source = image.first.get_attribute('src') if image.count() else None
+def gallery_image_key(source: str | None, detail_text: str) -> str:
     identity = source.split('?')[0] if source else _labelled_text(detail_text, {'タイトル', 'クリエイター', 'キーワード'})
     return hashlib.sha1(identity.encode('utf-8')).hexdigest()[:16]
 
@@ -114,34 +112,46 @@ def select_gallery_image(page, article, used_keys=frozenset()):
         page.wait_for_timeout(1500)
         return gallery.locator('[role="button"]:has(figure)')
 
-    best = None
+    def open_candidate(candidate):
+        # Read the thumbnail before opening the detail view, which can change the result list.
+        image = candidate.locator('img')
+        source = image.first.get_attribute('src') if image.count() else None
+        candidate.click(timeout=10000)
+        page.wait_for_timeout(300)
+        detail = gallery.inner_text()
+        return gallery_image_key(source, detail), detail
+
+    def close_detail():
+        gallery.get_by_role('button', name='この画像を使用しない').click(timeout=10000)
+        page.wait_for_timeout(200)
+
+    found = []
     for keyword in keywords:
         candidates = show_results(keyword)
         for index in range(min(candidates.count(), 15)):
-            candidate = candidates.nth(index)
-            candidate.click(timeout=10000)
-            page.wait_for_timeout(300)
-            detail = gallery.inner_text()
-            gallery.get_by_role('button', name='この画像を使用しない').click(timeout=10000)
-            page.wait_for_timeout(200)
-            key = gallery_image_key(candidate, detail)
+            key, detail = open_candidate(candidates.nth(index))
+            close_detail()
             score = gallery_image_score(detail, keyword, keywords)
-            if key not in used_keys and score and (best is None or score > best[0]):
-                best = (score, keyword, index, key)
-        if best and best[0] >= 3:
+            if key not in used_keys and score and key not in {f[2] for f in found}:
+                found.append((score, keyword, key))
+        if found and max(f[0] for f in found) >= 3:
             break
-    if best is None:
+    if not found:
         raise RuntimeError('記事に関連する未使用のフォトギャラリー画像を確認できませんでした')
 
-    score, keyword, index, key = best
-    candidate = show_results(keyword).nth(index)
-    candidate.click(timeout=10000)
-    page.wait_for_timeout(300)
-    if gallery_image_key(candidate, gallery.inner_text()) != key:
-        raise RuntimeError('選んだフォトギャラリー画像を再表示できませんでした')
-    gallery.get_by_role('button', name='この画像を挿入').click(timeout=10000)
-    save = page.get_by_role('button', name='保存', exact=True)
-    page.get_by_role('dialog').filter(has=save).get_by_role('button', name='保存', exact=True).click(timeout=10000)
-    _wait_for_loaded_eyecatch(page)
-    print(f"  フォトギャラリー検索: {keyword} (一致{score}語, {key})")
-    return key
+    # Search results can be reordered between searches, so locate the chosen image by key, falling back to the next best.
+    for score, keyword, key in sorted(found, key=lambda f: -f[0])[:3]:
+        candidates = show_results(keyword)
+        for index in range(min(candidates.count(), 30)):
+            candidate_key, _ = open_candidate(candidates.nth(index))
+            if candidate_key != key:
+                close_detail()
+                continue
+            gallery.get_by_role('button', name='この画像を挿入').click(timeout=10000)
+            save = page.get_by_role('button', name='保存', exact=True)
+            page.get_by_role('dialog').filter(has=save).get_by_role('button', name='保存', exact=True).click(timeout=10000)
+            _wait_for_loaded_eyecatch(page)
+            print(f"  フォトギャラリー検索: {keyword} (一致{score}語, {key})")
+            return key
+        print(f"  選んだ画像が再検索結果に見つからないため次の候補を試します: {keyword} ({key})")
+    raise RuntimeError('選んだフォトギャラリー画像を再表示できませんでした')

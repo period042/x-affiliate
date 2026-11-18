@@ -1,0 +1,69 @@
+name: Note Post Relay
+
+# GitHub delivers scheduled events for this repo hours late, so this job waits on a runner
+# until each JST slot and dispatches the posting workflow itself, then hands off to the next run.
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/note_post_relay.yml'
+  schedule:
+    - cron: '7 */3 * * *' # restarts the relay if the chain ever breaks
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: note-post-relay
+  cancel-in-progress: false
+
+jobs:
+  relay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    steps:
+      - name: Wait for the next posting slot and dispatch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          now=$(date +%s)
+          hour=$((10#$(TZ=Asia/Tokyo date +%H)))
+          if [ "$hour" -ge 20 ]; then
+            echo "Inside the paid window (JST hour $hour); dispatching paid posting now"
+            gh workflow run note_paid_post.yml -R "$REPO" --ref main
+          fi
+
+          today=$(TZ=Asia/Tokyo date +%F)
+          next=""
+          workflow=""
+          for slot in "08:00 note_post.yml" "13:00 note_post.yml" "20:00 note_paid_post.yml"; do
+            set -- $slot
+            at=$(TZ=Asia/Tokyo date -d "$today $1" +%s)
+            if [ "$at" -gt "$now" ]; then
+              next=$at
+              workflow=$2
+              break
+            fi
+          done
+          if [ -z "$next" ]; then
+            tomorrow=$(TZ=Asia/Tokyo date -d "$today +1 day" +%F)
+            next=$(TZ=Asia/Tokyo date -d "$tomorrow 08:00" +%s)
+            workflow=note_post.yml
+          fi
+
+          wait=$((next - now))
+          max=$((340 * 60))
+          if [ "$wait" -gt "$max" ]; then
+            echo "Next slot $(TZ=Asia/Tokyo date -d @"$next" '+%F %H:%M') JST is beyond this job; handing off after ${max}s"
+            sleep "$max"
+          else
+            echo "Sleeping ${wait}s until $(TZ=Asia/Tokyo date -d @"$next" '+%F %H:%M') JST for $workflow"
+            sleep "$wait"
+            gh workflow run "$workflow" -R "$REPO" --ref main
+          fi
+          gh workflow run note_post_relay.yml -R "$REPO" --ref main
